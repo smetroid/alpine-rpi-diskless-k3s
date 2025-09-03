@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash:*)",
+      "Bash(./build-from-yaml.sh:*)",
+      "Bash(grep:*)",
+      "Bash(source:*)",
+      "Bash(yaml_get_nodes)",
+      "Bash(yaml_get:*)",
+      "Bash(CONFIG_FILE=\"../k3s.yaml\" LIB_DIR=\"../lib\" ../scripts/setup-k3s-yaml.sh)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

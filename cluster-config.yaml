@@ -1,0 +1,93 @@
+# Alpine Diskless k3s Cluster Configuration
+# Modify these values to match your environment
+
+cluster:
+  name: "alpine-k3s"
+  k3s_version: "latest"
+  token: "" # Leave empty to auto-generate
+
+network:
+  domain: "local"
+  subnet: "192.168.1.0/24"
+  gateway: "192.168.1.254"
+  dns_servers:
+    - "192.168.1.254"
+  
+  # MetalLB LoadBalancer IP range
+  loadbalancer_pool:
+    start: "192.168.1.100"
+    end: "192.168.1.199"
+
+nodes:
+  - name: "k3s-21"
+    ip: "192.168.1.21"
+    role: "master"
+    taints:
+      - "CriticalAddonsOnly=true:NoExecute"
+  
+  - name: "k3s-22"
+    ip: "192.168.1.22"
+    role: "worker"
+  
+  - name: "k3s-23"
+    ip: "192.168.1.23"
+    role: "worker"
+
+k3s:
+  # Services to disable (k3s defaults: servicelb, traefik)
+  disable_services:
+    - "servicelb"
+    - "traefik"
+  
+  # Cluster networking
+  cluster_cidr: "10.42.0.0/16"
+  service_cidr: "10.43.0.0/16"
+  flannel_backend: "vxlan"
+
+services:
+  metallb:
+    enabled: true
+    version: "v0.13.12"
+  
+  nginx_ingress:
+    enabled: true
+    version: "v1.8.4"
+    replicas: 2
+
+alpine:
+  version: "3.18.6"
+  architecture: "aarch64"
+  
+  # Additional packages to install
+  packages:
+    - "curl"
+    - "ca-certificates"
+    - "iptables"
+    - "ip6tables"
+    - "util-linux"
+    - "coreutils"
+    - "findutils"
+    - "netcat-openbsd"
+    - "cgroup-tools"
+
+storage:
+  # SD card device (will be set per deployment)
+  device: "/dev/mmcblk0"
+  
+  # Partition sizes
+  boot_partition_size: "512MiB"
+  
+  # Mount points
+  data_mount: "/mnt/data"
+  persistent_paths:
+    - "/etc/k3s"
+    - "/var/lib/k3s"
+
+ssh:
+  port: 22
+  permit_root_login: true
+  password_authentication: true
+  
+  # SSH public keys (add your keys here)
+  authorized_keys: []
+    # - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... user@host"
