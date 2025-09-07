@@ -59,7 +59,7 @@ if [ -f "$SCRIPT_DIR/setup-persistence.sh" ]; then
         fi
         
         # Add Alpine configuration backup script
-        cat > "${NODE_NAME}-apkovl/etc/local.d/backup-config.start" << 'EOF'
+        cat > "${NODE_NAME}-apkovl/etc/local.d/80-backup-config.start" << 'EOF'
 #!/bin/sh
 
 # Create persistent backup of Alpine configuration
@@ -85,10 +85,10 @@ cp -rf /etc/k3s /mnt/data/alpine-backup/etc/ 2>/dev/null || true
 
 sync
 EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/local.d/backup-config.start"
+        chmod +x "${NODE_NAME}-apkovl/etc/local.d/80-backup-config.start"
         
         # Add other persistence scripts...
-        cat > "${NODE_NAME}-apkovl/etc/local.d/restore-config.start" << 'EOF'
+        cat > "${NODE_NAME}-apkovl/etc/local.d/20-restore-config.start" << 'EOF'
 #!/bin/sh
 
 # Restore Alpine configuration from persistent storage
@@ -105,7 +105,7 @@ if [ -d /mnt/data/alpine-backup ]; then
     chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
 fi
 EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/local.d/restore-config.start"
+        chmod +x "${NODE_NAME}-apkovl/etc/local.d/20-restore-config.start"
         
         # Create additional system configuration files
         cat > "${NODE_NAME}-apkovl/etc/modules" << 'EOF'
@@ -175,6 +175,20 @@ EOF
         echo "    $pkg \\" >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start"
     done
     
+    # Get timezone from config
+    ALPINE_TIMEZONE=$(get_alpine_timezone)
+    
+    cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << EOF
+
+# Configure timezone if specified
+EOF
+    if [ -n "$ALPINE_TIMEZONE" ]; then
+        cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << EOF
+echo "Setting timezone to $ALPINE_TIMEZONE..."
+setup-timezone -z $ALPINE_TIMEZONE
+EOF
+    fi
+    
     cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << 'EOF'
 
 # Enable services
@@ -192,6 +206,7 @@ lbu_media=/mnt/data
 echo "$lbu_media" > /etc/lbu/lbu.conf
 
 echo "System initialization complete"
+echo "✅ System: Packages and timezone configured" > /dev/console
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start"
     
@@ -209,6 +224,8 @@ rc-service sshd start 2>/dev/null || true
 (sleep 30 && rc-service k3s start) &
 
 echo "All services initialization complete"
+echo "✅ Services: k3s starting in background" > /dev/console
+echo "🎉 Alpine Diskless k3s node ready!" > /dev/console
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/local.d/99-start-services.start"
     

@@ -177,7 +177,7 @@ EOF
         VERSION_FLAG="INSTALL_K3S_VERSION=$K3S_VERSION"
     fi
     
-    cat > "${NODE_NAME}-apkovl/etc/local.d/install-k3s.start" << EOF
+    cat > "${NODE_NAME}-apkovl/etc/local.d/30-install-k3s.start" << EOF
 #!/bin/sh
 
 # Install k3s if not present
@@ -190,7 +190,7 @@ if [ ! -f /usr/local/bin/k3s ]; then
     rc-update add local default
 fi
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/install-k3s.start"
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/30-install-k3s.start"
 
 done
 

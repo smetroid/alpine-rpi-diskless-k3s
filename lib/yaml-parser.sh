@@ -361,6 +361,7 @@ get_service_replicas() {
 get_k3s_cluster_cidr() { yaml_get "k3s.cluster_cidr"; }
 get_k3s_service_cidr() { yaml_get "k3s.service_cidr"; }
 get_alpine_packages() { yaml_get_array "alpine.packages"; }
+get_alpine_timezone() { yaml_get "alpine.timezone"; }
 
 # Validation functions
 validate_config() {

@@ -148,99 +148,131 @@ ${STORAGE_DEVICE}p1 /media/mmcblk0p1 vfat defaults 0 0
 ${STORAGE_DEVICE}p2 $DATA_MOUNT ext4 defaults 0 0
 EOF
 
-    # Create mount script for persistent storage
+    # Create comprehensive Alpine initialization script
     DATA_MOUNT=$(yaml_get "storage.data_mount")
     STORAGE_DEVICE=$(yaml_get "storage.device")
     
-    cat > "${NODE_NAME}-apkovl/etc/local.d/mount-storage.start" << EOF
+    # Create simple but comprehensive Alpine initialization script
+    cat > "${NODE_NAME}-apkovl/etc/local.d/10-alpine-k3s-init.start" << EOF
 #!/bin/sh
 
-# Wait for SD card to be available and kernel to settle
-echo "Waiting for storage device to be ready..."
-sleep 5
+# Alpine Diskless k3s Initialization Script
+# This runs via the 'local' service during boot
 
-# Ensure the main device exists
+exec > /dev/console 2>&1
+echo "=============================================="
+echo "🚀 Alpine Diskless k3s Node Initialization"
+echo "Node: \$(cat /etc/hostname 2>/dev/null || echo 'unknown')"
+echo "Time: \$(date)"
+echo "=============================================="
+
+# Wait for system to stabilize
+echo "⏳ Waiting for system to stabilize..."
+sleep 10
+
+# Install required packages
+echo "📦 Installing required packages..."
+apk add --no-cache e2fsprogs parted util-linux
+
+# Check for storage device
+echo "🔍 Checking for storage device $STORAGE_DEVICE..."
 if [ ! -b "$STORAGE_DEVICE" ]; then
-    echo "Error: Storage device $STORAGE_DEVICE not found"
+    echo "❌ Storage device $STORAGE_DEVICE not found"
+    echo "Available devices:"
+    ls -la /dev/mmc* /dev/sd* 2>/dev/null || echo "No storage devices found"
     exit 1
 fi
+echo "✅ Storage device found"
 
-# Check if data partition exists and create if needed
-if ! blkid ${STORAGE_DEVICE}p2 >/dev/null 2>&1; then
-    echo "Data partition not found, creating..."
-    
-    # Use parted for more reliable partition creation
-    if command -v parted >/dev/null 2>&1; then
-        # Get the end of partition 1 to start partition 2 after it
-        PART1_END=\$(parted -s $STORAGE_DEVICE print | awk '/^ 1/ {print \$4}' | sed 's/[^0-9.]//g')
-        if [ -n "\$PART1_END" ]; then
-            PART2_START="\${PART1_END}MiB"
-        else
-            PART2_START="513MiB"
-        fi
-        
-        echo "Creating data partition starting at \$PART2_START..."
-        parted -s $STORAGE_DEVICE mkpart primary ext4 "\$PART2_START" 100%
+# Create data partition if needed
+echo "🔧 Checking for data partition..."
+if [ ! -b "${STORAGE_DEVICE}p2" ]; then
+    echo "📝 Creating data partition..."
+    # Get the end of partition 1 to calculate start of partition 2
+    PART1_END=\$(fdisk -l $STORAGE_DEVICE | awk '/^${STORAGE_DEVICE}p1/ {print \$3}')
+    if [ -n "\$PART1_END" ]; then
+        PART2_START=\$((PART1_END + 1))
     else
-        # Fallback to fdisk if parted not available
-        echo "Using fdisk for partition creation..."
-        echo -e "n\\np\\n2\\n\\n\\nw" | fdisk $STORAGE_DEVICE
+        PART2_START=1048576  # Default: 512MB in sectors
     fi
-    
-    # Wait for kernel to recognize the new partition
+    echo "Creating partition 2 starting at sector \$PART2_START"
+    echo -e "n\\np\\n2\\n\$PART2_START\\n\\nw" | fdisk $STORAGE_DEVICE
     sleep 3
-    
-    # Re-read partition table
     partprobe $STORAGE_DEVICE 2>/dev/null || true
     sleep 2
-fi
-
-# Format data partition if it's not formatted
-if ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
-    echo "Formatting data partition as ext4..."
-    if ! mkfs.ext4 -F -L DATA ${STORAGE_DEVICE}p2; then
-        echo "Error: Failed to format data partition"
+    
+    # Verify partition was created
+    if [ ! -b "${STORAGE_DEVICE}p2" ]; then
+        echo "❌ Failed to create data partition"
         exit 1
     fi
-    echo "Data partition formatted successfully"
 fi
 
-# Create mount point and mount data partition
+# Format if needed
+if [ -b "${STORAGE_DEVICE}p2" ] && ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
+    echo "💾 Formatting data partition..."
+    mkfs.ext4 -F -L DATA ${STORAGE_DEVICE}p2
+fi
+
+# Mount data partition
+echo "📁 Mounting persistent storage..."
 mkdir -p $DATA_MOUNT
-if ! mount ${STORAGE_DEVICE}p2 $DATA_MOUNT; then
-    echo "Error: Failed to mount data partition"
+if mount ${STORAGE_DEVICE}p2 $DATA_MOUNT; then
+    echo "✅ Storage mounted at $DATA_MOUNT"
+else
+    echo "❌ Failed to mount storage"
     exit 1
 fi
 
-echo "Data partition mounted at $DATA_MOUNT"
+# Create directories (fix shell expansion)
+echo "📂 Creating directories..."
+mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
 
-# Create necessary directories on data partition
-mkdir -p $DATA_MOUNT/{k3s,etc-persistent,var-lib-k3s}
+# Set up bind mounts
+echo "🔗 Setting up bind mounts..."
+mkdir -p /etc/k3s /var/lib/k3s
+mount --bind $DATA_MOUNT/k3s /etc/k3s
+mount --bind $DATA_MOUNT/var-lib-k3s /var/lib/k3s
 
-# Create bind mount directories and mount persistent directories
-mkdir -p /etc/k3s
-if mount --bind $DATA_MOUNT/k3s /etc/k3s; then
-    echo "Bind mounted k3s configuration directory"
-else
-    echo "Warning: Failed to bind mount k3s configuration"
-fi
-
-mkdir -p /var/lib/k3s
-if mount --bind $DATA_MOUNT/var-lib-k3s /var/lib/k3s; then
-    echo "Bind mounted k3s data directory"
-else
-    echo "Warning: Failed to bind mount k3s data"
-fi
-
-# Restore persistent etc files if they exist
-if [ -d $DATA_MOUNT/etc-persistent ]; then
-    echo "Restoring persistent configuration files..."
-    cp -r $DATA_MOUNT/etc-persistent/* /etc/ 2>/dev/null || true
-fi
-
-echo "Persistent storage setup complete"
+echo "✅ Alpine k3s initialization complete"
+echo "=============================================="
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/mount-storage.start"
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/10-alpine-k3s-init.start"
+    
+    # Create console notification script (visible on HDMI)
+    cat > "${NODE_NAME}-apkovl/etc/local.d/05-console-notify.start" << 'EOF'
+#!/bin/sh
+# Show progress on console (HDMI/Serial)
+echo "" > /dev/console
+echo "=====================================================" > /dev/console
+echo "🚀 Alpine Diskless k3s System Starting..." > /dev/console
+echo "Node: $(cat /etc/hostname 2>/dev/null || echo 'unknown')" > /dev/console
+echo "Time: $(date)" > /dev/console
+echo "=====================================================" > /dev/console
+echo "📋 Local.d scripts execution order:" > /dev/console
+echo "  05-console-notify.start  ← You are here" > /dev/console  
+echo "  10-mount-storage.start   → Mounting /mnt/data" > /dev/console
+echo "  20-restore-config.start  → Restoring configs" > /dev/console
+echo "  30-install-k3s.start     → Installing k3s" > /dev/console
+echo "  80-backup-config.start   → Backing up configs" > /dev/console
+echo "  99-start-services.start  → Starting services" > /dev/console
+echo "=====================================================" > /dev/console
+echo "" > /dev/console
+
+# Also log to file
+echo "Console notification displayed at $(date)" >> /var/log/console-notify.log
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/05-console-notify.start"
+    
+    # Create diagnostic script to test local.d execution
+    cat > "${NODE_NAME}-apkovl/etc/local.d/01-test-locald.start" << 'EOF'
+#!/bin/sh
+echo "=== 01-test-locald.start: Local.d service is working ===" | tee -a /var/log/locald-test.log
+date | tee -a /var/log/locald-test.log
+echo "Available storage devices:" | tee -a /var/log/locald-test.log
+ls -la /dev/mmc* /dev/sd* 2>/dev/null | tee -a /var/log/locald-test.log || echo "No storage devices found" | tee -a /var/log/locald-test.log
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/01-test-locald.start"
     
     # Create save script for persistent data
     cat > "${NODE_NAME}-apkovl/etc/local.d/save-persistent.stop" << EOF

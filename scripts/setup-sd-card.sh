@@ -60,21 +60,23 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     
     # Unmount the disk first
     sudo diskutil unmountDisk $SD_DEVICE
+
+    #echo "Formatting boot partition..."
+    #diskutil eraseDisk free EMPTY ${SD_DEVICE}
     
     # Convert boot partition size from MiB to MB for diskutil
     BOOT_SIZE_MB=$(echo "$BOOT_PARTITION_SIZE" | sed 's/MiB//' | sed 's/MB//')
     BOOT_SIZE_DISKUTIL="${BOOT_SIZE_MB}MB"
     
-    echo "Creating boot partition only (${BOOT_SIZE_DISKUTIL})"
-    echo "Data partition will be created by Alpine on first boot"
+    echo "Creating both boot and data partitions"
     
-    # Create single boot partition, leaving rest as free space
+    # Create both partitions: boot (FAT32) and data (free space for ext4)
     if sudo diskutil partitionDisk $SD_DEVICE MBR \
-        FAT32 BOOT $BOOT_SIZE_DISKUTIL \
+        FAT32 ALPINE_BOOT $BOOT_SIZE_DISKUTIL \
         "Free Space" DATA 0; then
-        echo "✅ Boot partition created successfully"
+        echo "✅ Boot and data partitions created successfully"
     else
-        echo "❌ Failed to create boot partition"
+        echo "❌ Failed to create partitions"
         exit 1
     fi
     
@@ -86,53 +88,85 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     diskutil list $SD_DEVICE
 
 else
-    echo "Using parted for partitioning..."
-    # Create partition table
-    sudo parted -s $SD_DEVICE mklabel msdos
-    
-    # Create boot partition only (size from config)
-    sudo parted -s $SD_DEVICE mkpart primary fat32 1MiB $BOOT_PARTITION_SIZE
-    sudo parted -s $SD_DEVICE set 1 boot on
-    
-    echo "✅ Boot partition created (data partition will be created by Alpine on first boot)"
+    # Check available partitioning tools
+    if command -v sfdisk >/dev/null 2>&1; then
+        echo "Using sfdisk for partitioning..."
+        
+        # Convert boot partition size to sectors (assuming 512 byte sectors)
+        BOOT_SIZE_SECTORS=$(echo "$BOOT_PARTITION_SIZE" | sed 's/MiB//' | awk '{print int($1 * 2048)}')
+        
+        # Create partition layout with sfdisk
+        sudo sfdisk $SD_DEVICE << EOF
+label: dos
+label-id: 0x12345678
+unit: sectors
+
+${SD_DEVICE}1 : start=2048, size=$BOOT_SIZE_SECTORS, type=c, bootable
+${SD_DEVICE}2 : start=$((2048 + BOOT_SIZE_SECTORS)), type=83
+EOF
+
+        if [ $? -eq 0 ]; then
+            echo "✅ Boot and data partitions created with sfdisk"
+        else
+            echo "❌ sfdisk failed, trying manual approach..."
+            if command -v cfdisk >/dev/null 2>&1; then
+                echo ""
+                echo "Please manually create partitions using cfdisk:"
+                echo "1. Boot partition (FAT32): Start=1MiB, Size=$BOOT_PARTITION_SIZE, Type=c, Bootable=yes"
+                echo "2. Data partition (Linux): Use remaining space, Type=83"
+                read -p "Press Enter to open cfdisk..."
+                sudo cfdisk $SD_DEVICE
+            else
+                echo "❌ No suitable partitioning tools found. Please install util-linux package."
+                exit 1
+            fi
+        fi
+    elif command -v parted >/dev/null 2>&1; then
+        echo "Using parted for partitioning..."
+        # Create partition table
+        sudo parted -s $SD_DEVICE mklabel msdos
+        
+        # Create both boot and data partitions
+        sudo parted -s $SD_DEVICE mkpart primary fat32 1MiB $BOOT_PARTITION_SIZE
+        sudo parted -s $SD_DEVICE set 1 boot on
+        sudo parted -s $SD_DEVICE mkpart primary ext4 $BOOT_PARTITION_SIZE 100%
+        
+        echo "✅ Boot and data partitions created with parted"
+    else
+        echo "❌ No suitable partitioning tools found."
+        echo "Please install one of: util-linux (sfdisk/cfdisk), parted"
+        echo ""
+        echo "On Ubuntu/Debian: sudo apt install util-linux parted"
+        echo "On RHEL/CentOS: sudo yum install util-linux parted"
+        echo "On Alpine: apk add util-linux parted"
+        exit 1
+    fi
 fi
 
 # Wait for kernel to recognize partitions
 sleep 2
 
-# Format boot partition only
-echo "Formatting boot partition..."
-
+# Set boot partition device path
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "Using macOS formatting tools..."
-    
-    # Boot partition should already be formatted as FAT32, just ensure proper label
-    echo "Setting up boot partition..."
-    if sudo diskutil rename ${SD_DEVICE}s1 BOOT; then
-        echo "✅ Boot partition ready"
-    else
-        echo "⚠️  Failed to rename boot partition, but it should still work"
-    fi
-    
     # On macOS, partition names include 's'
     BOOT_PARTITION="${SD_DEVICE}s1"
-    
+    echo "Boot partition: $BOOT_PARTITION"
 else
-    echo "Using Linux formatting tools..."
+    BOOT_PARTITION="${SD_DEVICE}1"
+    echo "Boot partition: $BOOT_PARTITION"
     
-    # Format boot partition (FAT32)
-    if sudo mkfs.vfat -F 32 -n BOOT ${SD_DEVICE}1; then
+    # On Linux, we need to manually format since partitionDisk handles it on macOS
+    echo "Formatting boot partition as FAT32..."
+    if sudo mkfs.vfat -F 32 -n ALPINE_BOOT ${SD_DEVICE}1; then
         echo "✅ Boot partition formatted"
     else
         echo "❌ Failed to format boot partition"
         exit 1
     fi
-    
-    BOOT_PARTITION="${SD_DEVICE}1"
 fi
 
 echo "✅ Boot partition ready"
-echo "📝 Data partition will be created and formatted by Alpine on first boot"
+echo "📝 Data partition created (will be formatted by Alpine on first boot)"
 
 # Mount boot partition only
 MOUNT_BOOT=$(mktemp -d)
@@ -253,12 +287,15 @@ fi
 
 # Configure boot
 sudo tee cmdline.txt << 'EOF'
-modules=loop,squashfs,sd-mod,usb-storage quiet console=tty1
+modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty1
 EOF
 
 sudo tee usercfg.txt << 'EOF'
 # Enable cgroups for k3s
-cgroup_memory=1 cgroup_enable=memory
+cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1
+
+# Enable UART for serial console access
+enable_uart=1
 EOF
 
 echo "✅ Boot configuration files created"
@@ -292,7 +329,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     if ! rmdir "$MOUNT_BOOT" 2>/dev/null; then
         echo "⚠️  Mount directory still busy, attempting force cleanup..."
         sudo lsof +D "$MOUNT_BOOT" 2>/dev/null || true
-        sudo umount -f "$MOUNT_BOOT" 2>/dev/null || true
+        sudo diskutil umount -f "$MOUNT_BOOT" 2>/dev/null || true
         sleep 1
         rmdir "$MOUNT_BOOT" 2>/dev/null || echo "⚠️  Could not remove temp directory $MOUNT_BOOT (this is usually harmless)"
     fi
