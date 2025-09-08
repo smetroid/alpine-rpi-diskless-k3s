@@ -58,6 +58,14 @@ fi
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "Detected macOS - using diskutil for partitioning..."
     
+    # Create partition layout: Boot partition + Data partition
+    echo ""
+    echo "📋 Creating partition layout:"
+    echo "  Partition 1: Boot partition ($BOOT_PARTITION_SIZE, FAT32, bootable)"
+    echo "  Partition 2: Data partition (remaining space, unformatted)"
+    echo "  Note: Data partition will be formatted to ext4 during Alpine boot"
+    echo ""
+    
     # Unmount the disk first
     sudo diskutil unmountDisk $SD_DEVICE
 
@@ -68,13 +76,34 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     BOOT_SIZE_MB=$(echo "$BOOT_PARTITION_SIZE" | sed 's/MiB//' | sed 's/MB//')
     BOOT_SIZE_DISKUTIL="${BOOT_SIZE_MB}MB"
     
-    echo "Creating both boot and data partitions"
+    echo "Creating partitions with diskutil..."
     
-    # Create both partitions: boot (FAT32) and data (free space for ext4)
+    # Create both partitions: boot (FAT32) and data (ExFAT as placeholder)
+    # We use ExFAT for the data partition as a placeholder - Alpine will reformat it to ext4
     if sudo diskutil partitionDisk $SD_DEVICE MBR \
         FAT32 ALPINE_BOOT $BOOT_SIZE_DISKUTIL \
-        "Free Space" DATA 0; then
-        echo "✅ Boot and data partitions created successfully"
+        ExFAT DATA 0; then
+        echo "✅ Boot and data partitions created with diskutil"
+        
+        # Verify both partitions exist
+        echo "🔍 Verifying partition layout..."
+        if diskutil list $SD_DEVICE | grep -q "2:" ; then
+            echo "✅ Both partitions confirmed"
+        else
+            echo "⚠️  Warning: Second partition may not be visible"
+        fi
+        
+        # Try to change the data partition to Linux type (0x83) using fdisk
+        echo "🔧 Converting data partition to Linux type..."
+        if command -v fdisk >/dev/null 2>&1; then
+            printf 't\n2\n83\nw\n' | sudo fdisk $SD_DEVICE 2>/dev/null && {
+                echo "✅ Data partition type set to Linux"
+            } || {
+                echo "⚠️  Could not change partition type (Alpine will handle formatting)"
+            }
+        else
+            echo "ℹ️  fdisk not available - partition will be reformatted by Alpine"
+        fi
     else
         echo "❌ Failed to create partitions"
         exit 1
@@ -88,6 +117,14 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     diskutil list $SD_DEVICE
 
 else
+    # Create partition layout: Boot partition + Data partition
+    echo ""
+    echo "📋 Creating partition layout:"
+    echo "  Partition 1: Boot partition ($BOOT_PARTITION_SIZE, FAT32, bootable)"
+    echo "  Partition 2: Data partition (remaining space, unformatted)"
+    echo "  Note: Data partition will be formatted to ext4 during Alpine boot"
+    echo ""
+
     # Check available partitioning tools
     if command -v sfdisk >/dev/null 2>&1; then
         echo "Using sfdisk for partitioning..."
@@ -300,8 +337,8 @@ EOF
 
 echo "✅ Boot configuration files created"
 
-# Note: Data partition will be created and set up by Alpine on first boot
 echo "✅ Boot partition setup complete"
+echo "✅ Data partition created (will be formatted during Alpine boot)"
 
 echo "SD card setup complete!"
 echo ""
@@ -309,33 +346,72 @@ echo "Next steps:"
 echo "1. Copy the appropriate .apkovl.tar.gz file to the boot partition"
 echo "2. Insert SD card into Raspberry Pi and boot"
 echo "3. The system will automatically:"
-echo "   - Create and format the data partition"
+echo "   - Format the data partition to ext4"
 echo "   - Mount persistent storage"
 echo "   - Install and configure k3s"
 echo "   - Join the k3s cluster"
 echo ""
 
-# Unmount
-echo "Unmounting boot partition..."
+# Unmount all partitions
+echo "Unmounting partitions..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # On macOS, unmount the partition first, then the mount point
-    sudo diskutil unmount $BOOT_PARTITION 2>/dev/null || true
-    sudo umount $MOUNT_BOOT 2>/dev/null || true
+    # On macOS, unmount both boot and data partitions
+    echo "Unmounting boot partition..."
+    sudo diskutil umount $BOOT_PARTITION 2>/dev/null || true
+    sudo diskutil umount $MOUNT_BOOT 2>/dev/null || true
     
-    # Wait for macOS to release the directory
-    sleep 2
+    # Also unmount the data partition (which may have auto-mounted)
+    echo "Unmounting data partition..."
+    DATA_PARTITION="${SD_DEVICE}s2"
+    sudo diskutil umount $DATA_PARTITION 2>/dev/null || true
     
-    # Use lsof to check what's using the directory and force cleanup if needed
+    # Unmount any other auto-mounted partitions from this disk
+    echo "Ensuring all partitions are unmounted..."
+    sudo diskutil unmountDisk $SD_DEVICE 2>/dev/null || true
+    
+    # Wait longer for macOS to release everything
+    echo "Waiting for macOS to release resources..."
+    sleep 5
+    
+    # Change to a different directory to avoid keeping temp directory busy
+    cd /tmp
+    
+    # Now try to remove the temp directory with better cleanup
     if ! rmdir "$MOUNT_BOOT" 2>/dev/null; then
-        echo "⚠️  Mount directory still busy, attempting force cleanup..."
-        sudo lsof +D "$MOUNT_BOOT" 2>/dev/null || true
-        sudo diskutil umount -f "$MOUNT_BOOT" 2>/dev/null || true
-        sleep 1
-        rmdir "$MOUNT_BOOT" 2>/dev/null || echo "⚠️  Could not remove temp directory $MOUNT_BOOT (this is usually harmless)"
+        echo "🔍 Investigating what's using the temp directory..."
+        sudo lsof +D "$MOUNT_BOOT" 2>/dev/null || echo "No processes found using directory"
+        
+        # Force unmount anything still mounted there
+        sudo diskutil umount force "$MOUNT_BOOT" 2>/dev/null || true
+        
+        # Wait a bit more
+        sleep 3
+        
+        # Try removal again
+        if ! rmdir "$MOUNT_BOOT" 2>/dev/null; then
+            echo "⚠️  Could not remove temp directory $MOUNT_BOOT"
+            echo "   This is usually harmless - the directory will be cleaned up on reboot"
+            echo "   You can manually remove it later with: rm -rf '$MOUNT_BOOT'"
+        else
+            echo "✅ Temp directory cleaned up successfully"
+        fi
+    else
+        echo "✅ Temp directory cleaned up successfully"
     fi
 else
+    # Linux cleanup
     sudo umount $MOUNT_BOOT
     rmdir $MOUNT_BOOT
 fi
 
-echo "SD card is ready for Alpine diskless k3s deployment"
+echo ""
+echo "🎉 SD card is ready for Alpine diskless k3s deployment!"
+echo ""
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "📋 Final partition layout:"
+    diskutil list $SD_DEVICE | grep -A 10 "${SD_DEVICE}:"
+    echo ""
+    echo "✅ Both partitions created and unmounted"
+    echo "   - Boot partition: Ready for apkovl file"  
+    echo "   - Data partition: Will be formatted to ext4 by Alpine"
+fi

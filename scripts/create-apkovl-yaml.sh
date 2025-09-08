@@ -49,7 +49,7 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE..."
     
     # Create directory structure
-    mkdir -p "${NODE_NAME}-apkovl"/{etc/{network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s}
+    mkdir -p "${NODE_NAME}-apkovl"/{etc/{network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
     
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
@@ -144,35 +144,98 @@ EOF
     DATA_MOUNT=$(yaml_get "storage.data_mount" 2>/dev/null || echo "/mnt/data")
     
     cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
-${STORAGE_DEVICE}p1 /media/mmcblk0p1 vfat defaults 0 0
-${STORAGE_DEVICE}p2 $DATA_MOUNT ext4 defaults 0 0
+# NOTE: Using noauto to prevent mount failures during initial boot
+# Devices are created by 00-test-execution.start script during local.d execution
+# k3s_bootstrap will manually mount these as needed
+${STORAGE_DEVICE}p1 /media/mmcblk0p1 vfat defaults,noauto 0 0
+${STORAGE_DEVICE}p2 $DATA_MOUNT ext4 defaults,noauto 0 0
 EOF
 
     # Create comprehensive Alpine initialization script
     DATA_MOUNT=$(yaml_get "storage.data_mount")
     STORAGE_DEVICE=$(yaml_get "storage.device")
     
-    # Create simple but comprehensive Alpine initialization script
-    cat > "${NODE_NAME}-apkovl/etc/local.d/10-alpine-k3s-init.start" << EOF
+    # Create the bootstrap script first
+    cat > "${NODE_NAME}-apkovl/usr/local/bin/k3s_bootstrap" << SCRIPT_EOF
 #!/bin/sh
 
-# Alpine Diskless k3s Initialization Script
-# This runs via the 'local' service during boot
+# Smart package management functions
+_apk() {
+    local cmd="\$1"
+    local pkg="\$2"
+    
+    case \$cmd in
+        add)
+            if ! apk info | grep -wq "\${pkg}"; then
+                apk add "\$pkg" && printf '%s ' "\${pkg}" >>/tmp/.trash/k3s_installed
+            fi
+        ;;
+        del)
+            if grep -wq "\$pkg" /tmp/.trash/k3s_installed >/dev/null 2>&1; then
+                apk del "\$pkg" && sed -i 's/\\b'"\${pkg}"'\\b//' /tmp/.trash/k3s_installed
+            fi
+        ;;
+    esac
+}
 
-exec > /dev/console 2>&1
+# File preservation functions
+_preserve() {
+    [ -z "\${1}" ] && return 1
+    [ -e "\${1}" ] && cp -a "\${1}" "\${1}".orig
+}
+
+_restore() {
+    [ -z "\${1}" ] && return 1
+    rm -rf "\${1}"
+    [ -e "\${1}".orig ] && mv -f "\${1}".orig "\${1}"
+}
+
+# Robust logger function that handles missing syslog
+_logger() {
+    local msg="$*"
+    # Try logger first, fallback to echo if syslog not available
+    if logger -st "k3s-bootstrap" "$msg" 2>/dev/null; then
+        :  # Success
+    else
+        echo "[k3s-bootstrap] $msg" >&2
+    fi
+}
+
+_logger "Alpine diskless k3s initialization starting"
 echo "=============================================="
 echo "🚀 Alpine Diskless k3s Node Initialization"
 echo "Node: \$(cat /etc/hostname 2>/dev/null || echo 'unknown')"
 echo "Time: \$(date)"
 echo "=============================================="
 
+# Create trash directory for tracking
+mkdir -p /tmp/.trash
+
 # Wait for system to stabilize
 echo "⏳ Waiting for system to stabilize..."
 sleep 10
 
-# Install required packages
+# Check if this is first boot or if we need to do full initialization
+FIRST_BOOT=false
+if [ ! -f $DATA_MOUNT/.k3s-initialized ]; then
+    FIRST_BOOT=true
+fi
+
+# Install required packages using smart package management
 echo "📦 Installing required packages..."
-apk add --no-cache e2fsprogs parted util-linux
+_apk add e2fsprogs
+
+# Load required kernel modules for k3s networking
+echo "🔧 Loading kernel modules for k3s..."
+modprobe bridge 2>/dev/null || echo "⚠️  Bridge module not available"
+modprobe br_netfilter 2>/dev/null || echo "⚠️  br_netfilter module not available"
+
+# Ensure bridge netfilter proc entries exist
+if [ -d /proc/sys/net/bridge ]; then
+    echo "✅ Bridge networking configured"
+else
+    echo "⚠️  Bridge networking not available - k3s may have limited functionality"
+fi
 
 # Check for storage device
 echo "🔍 Checking for storage device $STORAGE_DEVICE..."
@@ -184,29 +247,16 @@ if [ ! -b "$STORAGE_DEVICE" ]; then
 fi
 echo "✅ Storage device found"
 
-# Create data partition if needed
-echo "🔧 Checking for data partition..."
+# Verify data partition exists (should be created by setup-sd-card.sh)
+echo "🔧 Verifying data partition..."
 if [ ! -b "${STORAGE_DEVICE}p2" ]; then
-    echo "📝 Creating data partition..."
-    # Get the end of partition 1 to calculate start of partition 2
-    PART1_END=\$(fdisk -l $STORAGE_DEVICE | awk '/^${STORAGE_DEVICE}p1/ {print \$3}')
-    if [ -n "\$PART1_END" ]; then
-        PART2_START=\$((PART1_END + 1))
-    else
-        PART2_START=1048576  # Default: 512MB in sectors
-    fi
-    echo "Creating partition 2 starting at sector \$PART2_START"
-    echo -e "n\\np\\n2\\n\$PART2_START\\n\\nw" | fdisk $STORAGE_DEVICE
-    sleep 3
-    partprobe $STORAGE_DEVICE 2>/dev/null || true
-    sleep 2
-    
-    # Verify partition was created
-    if [ ! -b "${STORAGE_DEVICE}p2" ]; then
-        echo "❌ Failed to create data partition"
-        exit 1
-    fi
+    echo "❌ Data partition ${STORAGE_DEVICE}p2 not found"
+    echo "💡 Run setup-sd-card.sh first to create the partition layout"
+    echo "Available partitions:"
+    ls -la ${STORAGE_DEVICE}* 2>/dev/null || echo "No partitions found"
+    exit 1
 fi
+echo "✅ Data partition verified"
 
 # Format if needed
 if [ -b "${STORAGE_DEVICE}p2" ] && ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
@@ -224,70 +274,290 @@ else
     exit 1
 fi
 
-# Create directories (fix shell expansion)
-echo "📂 Creating directories..."
-mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
+# Check if this is first boot (now that storage is mounted)
+if [ ! -f $DATA_MOUNT/.k3s-initialized ]; then
+    FIRST_BOOT=true
+    echo "🆕 First boot detected - performing full initialization"
+else
+    FIRST_BOOT=false
+    echo "🔄 Subsequent boot - performing quick setup"
+fi
 
-# Set up bind mounts
+# Create directories only on first boot
+if [ "\$FIRST_BOOT" = "true" ]; then
+    echo "📂 Creating directories..."
+    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
+    
+    # Mark initialization as complete
+    echo "✅ First boot initialization complete at \$(date)" > $DATA_MOUNT/.k3s-initialized
+else
+    echo "📂 Directories already exist"
+fi
+
+# Set up bind mounts (always needed)
 echo "🔗 Setting up bind mounts..."
 mkdir -p /etc/k3s /var/lib/k3s
-mount --bind $DATA_MOUNT/k3s /etc/k3s
-mount --bind $DATA_MOUNT/var-lib-k3s /var/lib/k3s
 
-echo "✅ Alpine k3s initialization complete"
+# Idempotent bind mounts - only mount if not already mounted
+if ! mountpoint -q /etc/k3s 2>/dev/null; then
+    echo "📎 Mounting /etc/k3s..."
+    mount --bind $DATA_MOUNT/k3s /etc/k3s
+else
+    echo "✅ /etc/k3s already mounted"
+fi
+
+if ! mountpoint -q /var/lib/k3s 2>/dev/null; then
+    echo "📎 Mounting /var/lib/k3s..."
+    mount --bind $DATA_MOUNT/var-lib-k3s /var/lib/k3s
+else
+    echo "✅ /var/lib/k3s already mounted"
+fi
+
+# Install k3s if not present
+echo "🚀 Installing k3s..."
+if [ ! -f /usr/local/bin/k3s ]; then
+    _logger "Downloading and installing k3s"
+    echo "📥 Downloading k3s..."
+    wget -qO- https://get.k3s.io | sh -
+    if [ \$? -eq 0 ]; then
+        echo "✅ k3s installed successfully"
+        _logger "k3s installation completed successfully"
+    else
+        echo "❌ k3s installation failed"
+        _logger "k3s installation failed"
+        exit 1
+    fi
+else
+    echo "✅ k3s already installed"
+fi
+
+# Start k3s service
+echo "🔄 Starting k3s service..."
+if [ -f /etc/k3s/config.yaml ]; then
+    _logger "Starting k3s with configuration"
+    rc-service k3s start
+    rc-update add k3s default
+    echo "✅ k3s service started and enabled"
+else
+    echo "⚠️ No k3s configuration found - k3s not started"
+fi
+
+if [ "\$FIRST_BOOT" = "true" ]; then
+    _logger "Alpine k3s first boot initialization complete"
+    echo "✅ Alpine k3s first boot initialization complete"
+else
+    _logger "Alpine k3s subsequent boot setup complete"
+    echo "✅ Alpine k3s subsequent boot setup complete"
+fi
 echo "=============================================="
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/10-alpine-k3s-init.start"
-    
-    # Create console notification script (visible on HDMI)
-    cat > "${NODE_NAME}-apkovl/etc/local.d/05-console-notify.start" << 'EOF'
-#!/bin/sh
-# Show progress on console (HDMI/Serial)
-echo "" > /dev/console
-echo "=====================================================" > /dev/console
-echo "🚀 Alpine Diskless k3s System Starting..." > /dev/console
-echo "Node: $(cat /etc/hostname 2>/dev/null || echo 'unknown')" > /dev/console
-echo "Time: $(date)" > /dev/console
-echo "=====================================================" > /dev/console
-echo "📋 Local.d scripts execution order:" > /dev/console
-echo "  05-console-notify.start  ← You are here" > /dev/console  
-echo "  10-mount-storage.start   → Mounting /mnt/data" > /dev/console
-echo "  20-restore-config.start  → Restoring configs" > /dev/console
-echo "  30-install-k3s.start     → Installing k3s" > /dev/console
-echo "  80-backup-config.start   → Backing up configs" > /dev/console
-echo "  99-start-services.start  → Starting services" > /dev/console
-echo "=====================================================" > /dev/console
-echo "" > /dev/console
 
-# Also log to file
-echo "Console notification displayed at $(date)" >> /var/log/console-notify.log
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/05-console-notify.start"
-    
-    # Create diagnostic script to test local.d execution
-    cat > "${NODE_NAME}-apkovl/etc/local.d/01-test-locald.start" << 'EOF'
+# Create cleanup script for service removal
+cat > /tmp/.trash/k3s_cleanup << 'CLEANUP_EOF'
 #!/bin/sh
-echo "=== 01-test-locald.start: Local.d service is working ===" | tee -a /var/log/locald-test.log
-date | tee -a /var/log/locald-test.log
-echo "Available storage devices:" | tee -a /var/log/locald-test.log
-ls -la /dev/mmc* /dev/sd* 2>/dev/null | tee -a /var/log/locald-test.log || echo "No storage devices found" | tee -a /var/log/locald-test.log
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/01-test-locald.start"
+_logger() { logger -st "k3s-cleanup"; }
+
+_logger "Starting k3s bootstrap cleanup..."
+
+# Remove installed packages
+if [ -f /tmp/.trash/k3s_installed ]; then
+    while read -r pkg; do
+        [ -n "\$pkg" ] && apk del "\$pkg"
+    done < /tmp/.trash/k3s_installed
+fi
+
+# Remove bootstrap files
+rm -f /usr/local/bin/k3s_bootstrap
+rm -f /etc/init.d/k3s-bootstrap
+rm -f /etc/runlevels/default/k3s-bootstrap
+
+_logger "k3s bootstrap cleanup complete"
+CLEANUP_EOF
+chmod +x /tmp/.trash/k3s_cleanup
+
+exit 0
+SCRIPT_EOF
+    chmod +x "${NODE_NAME}-apkovl/usr/local/bin/k3s_bootstrap"
     
-    # Create save script for persistent data
-    cat > "${NODE_NAME}-apkovl/etc/local.d/save-persistent.stop" << EOF
+    # Add services to default runlevel
+    mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
+    # CRITICAL: Enable local service so that local.d scripts execute
+    ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
+    
+    # Create diagnostic script and fallback local.d bootstrap
+    cat > "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start" << 'EOF'
+#!/bin/sh
+# Test execution and QEMU device simulation script
+
+# Enhanced logger functions
+_log() { echo "$*" | tee -a /var/log/messages 2>/dev/null || echo "$*"; }
+_success() { echo "✅ $*" | tee -a /var/log/messages 2>/dev/null || echo "✅ $*"; }
+_error() { echo "❌ $*" | tee -a /var/log/messages 2>/dev/null || echo "❌ $*"; }
+
+_log "=== DIAGNOSTIC: local.d scripts ARE executing ==="
+_log "=== DIAGNOSTIC: Time: $(date) ==="
+_log "=== DIAGNOSTIC: Hostname: $(hostname) ==="
+_log "=== DIAGNOSTIC: Available services: $(rc-status -a 2>/dev/null | wc -l) ==="
+
+# QEMU Detection and Device Simulation
+_log "=== QEMU DETECTION AND DEVICE SETUP ==="
+
+# Check if we're running in QEMU (look for QEMU-specific devices)
+QEMU_DETECTED=false
+if [ -b /dev/sda ] || [ -b /dev/vda ] || grep -q "QEMU" /proc/cpuinfo 2>/dev/null; then
+    QEMU_DETECTED=true
+    _log "🖥️  QEMU environment detected - setting up device simulation"
+fi
+
+if [ "$QEMU_DETECTED" = "true" ]; then
+    # Determine which storage device is available
+    STORAGE_DEV=""
+    if [ -b /dev/sda ]; then
+        STORAGE_DEV="/dev/sda"
+        _log "Using /dev/sda for storage simulation"
+    elif [ -b /dev/vda ]; then
+        STORAGE_DEV="/dev/vda" 
+        _log "Using /dev/vda for storage simulation"
+    fi
+    
+    if [ -n "$STORAGE_DEV" ]; then
+        _success "Storage device: $STORAGE_DEV detected"
+        
+        # Check for reboot detection - look for system initialization marker
+        SYSTEM_INITIALIZED=false
+        mkdir -p /tmp/mnt_check 2>/dev/null || true
+        
+        # Try to mount data partition to check for initialization marker
+        if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
+            if [ -f "/tmp/mnt_check/.system-initialized" ]; then
+                SYSTEM_INITIALIZED=true
+                _log "🔄 System reboot detected - initialization marker found"
+            fi
+            umount /tmp/mnt_check 2>/dev/null || true
+        fi
+        
+        if [ "$SYSTEM_INITIALIZED" = "false" ]; then
+            # First boot - partition the storage device to simulate SD card
+            _log "🆕 First boot detected - setting up storage partitions (simulating Pi SD card)..."
+            (echo n; echo p; echo 1; echo; echo +256M; echo n; echo p; echo 2; echo; echo; echo t; echo 1; echo c; echo w) | fdisk "$STORAGE_DEV" >/dev/null 2>&1 || true
+            sleep 2
+            
+            # Ensure kernel recognizes partitions
+            partprobe "$STORAGE_DEV" 2>/dev/null || true
+            sleep 1
+            
+            # Format the data partition
+            _log "Formatting data partition..."
+            mkfs.ext4 -F "${STORAGE_DEV}2" >/dev/null 2>&1 || true
+            
+            # Mount and create initialization marker
+            if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
+                echo "$(date): System initialized on first boot" > /tmp/mnt_check/.system-initialized
+                umount /tmp/mnt_check 2>/dev/null || true
+                _success "System initialization marker created"
+            fi
+        else
+            _log "🔄 Reboot detected - skipping partitioning, ensuring device nodes exist"
+        fi
+        
+        # Always ensure device nodes exist (needed for both first boot and reboots)
+        _log "Creating/ensuring Raspberry Pi device simulation..."
+        if [ -b "${STORAGE_DEV}1" ] && [ -b "${STORAGE_DEV}2" ]; then
+            mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
+            mknod /dev/mmcblk0p1 b $(stat -c "%t %T" "${STORAGE_DEV}1") 2>/dev/null || true
+            mknod /dev/mmcblk0p2 b $(stat -c "%t %T" "${STORAGE_DEV}2") 2>/dev/null || true
+            _success "Raspberry Pi SD card simulation: /dev/mmcblk0 (/dev/mmcblk0p1, /dev/mmcblk0p2)"
+        else
+            # Fallback device creation with fixed major/minor numbers
+            _log "Partitions not detected, using fallback device creation..."
+            mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
+            mknod /dev/mmcblk0p1 b 8 1 2>/dev/null || true
+            mknod /dev/mmcblk0p2 b 8 2 2>/dev/null || true
+            _success "SD card devices created (fallback method)"
+        fi
+        
+        # Verify device creation
+        _log "Verifying created devices:"
+        ls -la /dev/mmcblk0* 2>/dev/null | while IFS= read -r line; do
+            _log "  $line"
+        done
+        
+        # Cleanup temporary mount point
+        rmdir /tmp/mnt_check 2>/dev/null || true
+    else
+        _error "No suitable storage device found for QEMU simulation"
+    fi
+else
+    _log "🥧 Real Raspberry Pi environment detected - using native mmcblk0 devices"
+fi
+
+_log "=== DEVICE SETUP COMPLETE ==="
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start"
+    
+    # Create k3s bootstrap using local.d (simplified approach)
+    cat > "${NODE_NAME}-apkovl/etc/local.d/10-k3s-bootstrap.start" << 'EOF'
 #!/bin/sh
 
-# Save persistent etc files
+# Simple logger function
+_log() { echo "$*" | tee -a /var/log/messages 2>/dev/null || echo "$*"; }
+
+# k3s bootstrap using local.d
+_log "=== Starting k3s bootstrap via local.d ==="
+
+# Check if bootstrap has already run successfully
+if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
+    _log "k3s bootstrap already completed - skipping"
+    exit 0
+fi
+
+# Run the bootstrap script
+if [ -x /usr/local/bin/k3s_bootstrap ]; then
+    _log "Running k3s bootstrap for the first time..."
+    # Pipe bootstrap output to both stdout and syslog
+    if /usr/local/bin/k3s_bootstrap 2>&1 | while IFS= read -r line; do
+        _log "$line"
+    done; then
+        # Mark bootstrap as complete only on successful execution
+        mkdir -p /mnt/data 2>/dev/null || true
+        echo "$(date): k3s bootstrap completed successfully" > /mnt/data/.k3s-bootstrap-complete
+        _log "k3s bootstrap completed successfully - marked as complete"
+    else
+        _log "k3s bootstrap failed - will retry on next boot"
+        exit 1
+    fi
+else
+    _log "=== ERROR: k3s_bootstrap script not found ==="
+    exit 1
+fi
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/10-k3s-bootstrap.start"
+    
+    # Create simple console notification (no longer needed with proper OpenRC service)
+    # The k3s-bootstrap service handles all console output
+    
+    # Create periodic save script for additional persistent data
+    cat > "${NODE_NAME}-apkovl/etc/local.d/20-save-persistent.start" << EOF
+#!/bin/sh
+
+# Simple logger function
+_log() { echo "\$*" | tee -a /var/log/messages 2>/dev/null || echo "\$*"; }
+
+_log "=== Setting up persistent data saves ==="
+
+# Save additional persistent etc files (k3s data is already bind-mounted)
 mkdir -p $DATA_MOUNT/etc-persistent
-cp -r /etc/k3s $DATA_MOUNT/etc-persistent/ 2>/dev/null || true
 cp /etc/hostname $DATA_MOUNT/etc-persistent/ 2>/dev/null || true
 cp /etc/resolv.conf $DATA_MOUNT/etc-persistent/ 2>/dev/null || true
 
-# Sync data
+# Create a cron job for periodic saves (every 5 minutes)
+echo "*/5 * * * * cp /etc/hostname /etc/resolv.conf $DATA_MOUNT/etc-persistent/ 2>/dev/null && sync" | crontab - 2>/dev/null || true
+
+# Initial sync
 sync
+
+_log "=== Persistent data save setup complete ==="
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/save-persistent.stop"
+    chmod +x "${NODE_NAME}-apkovl/etc/local.d/20-save-persistent.start"
 
 done
 

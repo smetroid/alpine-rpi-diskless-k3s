@@ -152,10 +152,64 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     ALPINE_PACKAGES=($(get_alpine_packages))
     
     # Create main system initialization script
-    cat > "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << EOF
+    cat > "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap" << EOF
+#!/sbin/openrc-run
+
+description="Alpine diskless system initialization service"
+name="system bootstrap"
+
+command="/usr/local/bin/system_bootstrap"
+command_background=true
+pidfile="/run/\${RC_SVCNAME}.pid"
+
+depend() {
+    need localmount
+    after localmount
+    before k3s-bootstrap
+    provide system-bootstrap
+}
+
+start_pre() {
+    # Create the actual system bootstrap script
+    cat > /usr/local/bin/system_bootstrap << 'SCRIPT_EOF'
 #!/bin/sh
 
-echo "Starting Alpine diskless k3s initialization..."
+# Smart package management functions
+_apk() {
+    local cmd="\$1"
+    local pkg="\$2"
+    
+    case \$cmd in
+        add)
+            if ! apk info | grep -wq "\${pkg}"; then
+                apk add "\$pkg" && printf '%s ' "\${pkg}" >>/tmp/.trash/system_installed
+            fi
+        ;;
+    esac
+}
+
+# Robust logger function that handles missing syslog
+_logger() {
+    local msg="$*"
+    # Try logger first, fallback to echo if syslog not available
+    if logger -st "system-bootstrap" "$msg" 2>/dev/null; then
+        :  # Success
+    else
+        echo "[system-bootstrap] $msg" >&2
+    fi
+}
+
+_logger "Starting Alpine diskless system initialization"
+
+# Create trash directory for tracking
+mkdir -p /tmp/.trash
+
+# Check if system initialization is already complete
+if [ -f /usr/local/bin/.system-initialized ]; then
+    _logger "System already initialized, skipping package installation"
+    echo "✅ System already initialized, skipping package installation"
+    exit 0
+fi
 
 # Set up package repositories
 cat > /etc/apk/repositories << 'REPOS'
@@ -164,70 +218,69 @@ http://dl-cdn.alpinelinux.org/alpine/v3.18/community
 REPOS
 
 # Update package index
+_logger "Updating package index"
 apk update
 
-# Install required packages
-apk add --no-cache \\
+# Install required packages using smart package management
+_logger "Installing packages from configuration"
 EOF
 
-    # Add packages from YAML config
+    # Add packages from YAML config using smart package management
     for pkg in "${ALPINE_PACKAGES[@]}"; do
-        echo "    $pkg \\" >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start"
+        echo "_apk add $pkg" >> "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
     done
     
     # Get timezone from config
     ALPINE_TIMEZONE=$(get_alpine_timezone)
     
-    cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << EOF
+    cat >> "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap" << EOF
 
 # Configure timezone if specified
 EOF
     if [ -n "$ALPINE_TIMEZONE" ]; then
-        cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << EOF
-echo "Setting timezone to $ALPINE_TIMEZONE..."
+        cat >> "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap" << EOF
+_logger "Setting timezone to $ALPINE_TIMEZONE"
+echo "⏰ Setting timezone to $ALPINE_TIMEZONE..."
 setup-timezone -z $ALPINE_TIMEZONE
 EOF
     fi
     
-    cat >> "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start" << 'EOF'
+    cat >> "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap" << 'EOF'
 
 # Enable services
+_logger "Enabling system services"
+echo "⚙️ Enabling system services..."
 rc-update add networking boot
 rc-update add urandom boot
 rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
 rc-update add sshd default
-rc-update add local default
 rc-update add savecache shutdown
 
 # Configure LBU (Local Backup Utility)
 lbu_media=/mnt/data
-echo "$lbu_media" > /etc/lbu/lbu.conf
+echo "\$lbu_media" > /etc/lbu/lbu.conf
 
-echo "System initialization complete"
+# Mark system initialization as complete
+touch /usr/local/bin/.system-initialized
+
+_logger "System initialization complete"
 echo "✅ System: Packages and timezone configured" > /dev/console
+
+exit 0
+SCRIPT_EOF
+    chmod +x /usr/local/bin/system_bootstrap
+}
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/00-system-init.start"
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
     
-    # Create service startup script
-    cat > "${NODE_NAME}-apkovl/etc/local.d/99-start-services.start" << 'EOF'
-#!/bin/sh
-
-echo "Starting final services..."
-
-# Ensure all required services are running
-rc-service networking start 2>/dev/null || true
-rc-service sshd start 2>/dev/null || true
-
-# Start k3s after a delay to ensure system is ready
-(sleep 30 && rc-service k3s start) &
-
-echo "All services initialization complete"
-echo "✅ Services: k3s starting in background" > /dev/console
-echo "🎉 Alpine Diskless k3s node ready!" > /dev/console
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/99-start-services.start"
+    # Add service to default runlevel  
+    mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
+    ln -sf /etc/init.d/system-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/system-bootstrap"
+    
+    # No longer need 99-start-services.start since we use proper OpenRC dependencies
+    # The k3s service will start automatically after k3s-installer completes
     
     # Note: apkovl archives will be created by create-apkovl-archives.sh
 done

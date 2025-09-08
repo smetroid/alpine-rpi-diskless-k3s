@@ -177,20 +177,70 @@ EOF
         VERSION_FLAG="INSTALL_K3S_VERSION=$K3S_VERSION"
     fi
     
-    cat > "${NODE_NAME}-apkovl/etc/local.d/30-install-k3s.start" << EOF
+    # Disabled - using local.d approach instead
+    : << 'DISABLED_OPENRC_SERVICE'
+    cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-installer" << EOF
+#!/sbin/openrc-run
+
+description="k3s installation service"
+name="k3s installer"
+
+command="/usr/local/bin/k3s_installer"
+command_background=true
+pidfile="/run/\${RC_SVCNAME}.pid"
+
+depend() {
+    need net k3s-bootstrap
+    after k3s-bootstrap
+    before k3s
+    provide k3s-installer
+}
+
+start_pre() {
+    # Create the k3s installer script
+    cat > /usr/local/bin/k3s_installer << 'SCRIPT_EOF'
 #!/bin/sh
+
+# Robust logger function that handles missing syslog
+_logger() {
+    local msg="$*"
+    # Try logger first, fallback to echo if syslog not available
+    if logger -st "k3s-installer" "$msg" 2>/dev/null; then
+        :  # Success
+    else
+        echo "[k3s-installer] $msg" >&2
+    fi
+}
+
+_logger "Starting k3s installation"
 
 # Install k3s if not present
 if [ ! -f /usr/local/bin/k3s ]; then
-    echo "Installing k3s..."
+    _logger "Downloading and installing k3s"
+    echo "📦 Installing k3s..."
     curl -sfL https://get.k3s.io | $VERSION_FLAG INSTALL_K3S_SKIP_START=true sh -
     
     # Enable required services
     rc-update add cgroups boot
-    rc-update add local default
+    
+    _logger "k3s installation complete"
+    echo "✅ k3s installation complete"
+else
+    _logger "k3s already installed"
+    echo "✅ k3s already installed"
 fi
+
+exit 0
+SCRIPT_EOF
+    chmod +x /usr/local/bin/k3s_installer
+}
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/30-install-k3s.start"
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-installer"
+    
+    # Add service to default runlevel
+    mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
+    ln -sf /etc/init.d/k3s-installer "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-installer"
+DISABLED_OPENRC_SERVICE
 
 done
 
