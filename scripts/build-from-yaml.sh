@@ -159,8 +159,7 @@ description="Alpine diskless system initialization service"
 name="system bootstrap"
 
 command="/usr/local/bin/system_bootstrap"
-command_background=true
-pidfile="/run/\${RC_SVCNAME}.pid"
+command_background=false
 
 depend() {
     need localmount
@@ -211,10 +210,11 @@ if [ -f /usr/local/bin/.system-initialized ]; then
     exit 0
 fi
 
-# Set up package repositories
-cat > /etc/apk/repositories << 'REPOS'
-http://dl-cdn.alpinelinux.org/alpine/v3.18/main
-http://dl-cdn.alpinelinux.org/alpine/v3.18/community
+# Set up package repositories using version from YAML config
+ALPINE_VERSION=\$(echo "$(yaml_get "alpine.version")" | cut -d. -f1,2)
+cat > /etc/apk/repositories << REPOS
+http://dl-cdn.alpinelinux.org/alpine/v\${ALPINE_VERSION}/main
+http://dl-cdn.alpinelinux.org/alpine/v\${ALPINE_VERSION}/community
 REPOS
 
 # Update package index
@@ -255,8 +255,53 @@ rc-update add urandom boot
 rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
-rc-update add sshd default
-rc-update add savecache shutdown
+
+log "=== Setting up SSH access ==="
+
+# Install and enable SSH
+if ! rc-service sshd status >/dev/null 2>&1; then
+    log "Installing OpenSSH..."
+    if apk add --no-cache openssh; then
+        log "OpenSSH installed successfully"
+        
+        log "Generating SSH host keys..."
+        if ssh-keygen -A; then
+            log "SSH host keys generated"
+        else
+            log "WARNING: Failed to generate SSH host keys"
+        fi
+        
+        log "Enabling SSH service..."
+        if rc-update add sshd default && rc-service sshd start; then
+            log "SSH service enabled and started"
+        else
+            log "ERROR: Failed to enable SSH service"
+            exit 1
+        fi
+    else
+        log "ERROR: Failed to install OpenSSH"
+        exit 1
+    fi
+else
+    log "SSH service is already running"
+fi
+
+## Fix SSH OpenSSL version mismatch by ensuring fresh installation
+#_logger "Setting up SSH with fresh OpenSSL"
+#echo "🔑 Setting up SSH with fresh OpenSSL..."
+#apk del openssh-server openssh 2>/dev/null || true
+#_apk add openssh-server
+#_apk add openssh
+#
+## Generate fresh SSH host keys to avoid OpenSSL version issues
+#rm -f /etc/ssh/ssh_host_*_key*
+## Generate only the key types we use (skip deprecated DSA)
+#ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key -N "" -q
+#ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -N "" -q  
+#ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
+#
+#rc-update add sshd default
+#rc-update add savecache shutdown
 
 # Configure LBU (Local Backup Utility)
 lbu_media=/mnt/data
@@ -275,9 +320,87 @@ SCRIPT_EOF
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
     
+    # Create k3s-bootstrap OpenRC service
+    cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap" << 'EOF'
+#!/sbin/openrc-run
+
+description="k3s cluster bootstrap service"
+name="k3s bootstrap"
+
+command="/usr/local/bin/k3s_bootstrap"
+command_background=false
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need system-bootstrap
+    after system-bootstrap
+    provide k3s-bootstrap
+}
+
+start_pre() {
+    # Check if bootstrap has already run successfully
+    if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
+        einfo "k3s bootstrap already completed - skipping"
+        return 1
+    fi
+    
+    # Wait for system-bootstrap to complete
+    ebegin "Waiting for system bootstrap to complete"
+    local timeout=300  # 5 minutes max
+    local count=0
+    while [ $count -lt $timeout ]; do
+        if [ -f /usr/local/bin/.system-initialized ]; then
+            eend 0 "System bootstrap completed"
+            break
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    if [ $count -ge $timeout ]; then
+        eerror "Timeout waiting for system bootstrap to complete"
+        return 1
+    fi
+    
+    # Ensure the k3s_bootstrap script exists
+    if [ ! -x /usr/local/bin/k3s_bootstrap ]; then
+        eerror "k3s_bootstrap script not found at /usr/local/bin/k3s_bootstrap"
+        return 1
+    fi
+    
+    ebegin "Starting k3s bootstrap"
+    return 0
+}
+
+start() {
+    ebegin "Running k3s cluster bootstrap"
+    
+    # Run the bootstrap script and capture output
+    if /usr/local/bin/k3s_bootstrap; then
+        # Mark bootstrap as complete only on successful execution
+        mkdir -p /mnt/data 2>/dev/null || true
+        echo "$(date): k3s bootstrap completed successfully" > /mnt/data/.k3s-bootstrap-complete
+        eend 0 "k3s bootstrap completed successfully"
+    else
+        eend 1 "k3s bootstrap failed - will retry on next boot"
+        return 1
+    fi
+}
+
+stop() {
+    ebegin "Stopping k3s bootstrap service"
+    # This service doesn't need to be stopped, it's a one-time run
+    eend 0
+}
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
+    
     # Add service to default runlevel  
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
     ln -sf /etc/init.d/system-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/system-bootstrap"
+    
+    # Enable k3s-bootstrap service to run after system-bootstrap
+    ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
     # No longer need 99-start-services.start since we use proper OpenRC dependencies
     # The k3s service will start automatically after k3s-installer completes

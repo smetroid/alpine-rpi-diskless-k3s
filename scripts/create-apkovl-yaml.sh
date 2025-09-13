@@ -53,6 +53,10 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
+
+    # This fixes the /lib/modules directory missing when booting, in turn breaks the image
+    # https://gitlab.alpinelinux.org/alpine/mkinitfs/-/issues/8
+    touch "${NODE_NAME}-apkovl/etc/.default_boot_services"
     
     # Network configuration - convert CIDR to netmask
     SUBNET=$(yaml_get "network.subnet")
@@ -99,7 +103,6 @@ EOF
 Port $SSH_PORT
 Protocol 2
 HostKey /etc/ssh/ssh_host_rsa_key
-HostKey /etc/ssh/ssh_host_dsa_key
 HostKey /etc/ssh/ssh_host_ecdsa_key
 HostKey /etc/ssh/ssh_host_ed25519_key
 UsePrivilegeSeparation yes
@@ -128,7 +131,8 @@ Subsystem sftp /usr/lib/openssh/sftp-server
 UsePAM yes
 EOF
 
-    # Add SSH authorized keys if provided
+    # Add SSH authorized keys if provided (overwrite any existing file)
+    rm -f "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
     yaml_get_array "ssh.authorized_keys" | while read -r key; do
         if [ -n "$key" ]; then
             echo "$key" >> "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
@@ -215,15 +219,22 @@ mkdir -p /tmp/.trash
 echo "⏳ Waiting for system to stabilize..."
 sleep 10
 
-# Check if this is first boot or if we need to do full initialization
+# Verify that disk-setup service has completed
+if [ ! -f $DATA_MOUNT/.disk-setup-complete ]; then
+    echo "❌ Disk setup not completed. disk-setup service should run first."
+    exit 1
+fi
+echo "✅ Disk setup verified - storage is ready"
+
+# Check if this is first boot
 FIRST_BOOT=false
 if [ ! -f $DATA_MOUNT/.k3s-initialized ]; then
     FIRST_BOOT=true
+    echo "🆕 First boot detected - performing full k3s initialization"
+else
+    FIRST_BOOT=false
+    echo "🔄 Subsequent boot - performing quick k3s setup"
 fi
-
-# Install required packages using smart package management
-echo "📦 Installing required packages..."
-_apk add e2fsprogs
 
 # Load required kernel modules for k3s networking
 echo "🔧 Loading kernel modules for k3s..."
@@ -235,63 +246,6 @@ if [ -d /proc/sys/net/bridge ]; then
     echo "✅ Bridge networking configured"
 else
     echo "⚠️  Bridge networking not available - k3s may have limited functionality"
-fi
-
-# Check for storage device
-echo "🔍 Checking for storage device $STORAGE_DEVICE..."
-if [ ! -b "$STORAGE_DEVICE" ]; then
-    echo "❌ Storage device $STORAGE_DEVICE not found"
-    echo "Available devices:"
-    ls -la /dev/mmc* /dev/sd* 2>/dev/null || echo "No storage devices found"
-    exit 1
-fi
-echo "✅ Storage device found"
-
-# Verify data partition exists (should be created by setup-sd-card.sh)
-echo "🔧 Verifying data partition..."
-if [ ! -b "${STORAGE_DEVICE}p2" ]; then
-    echo "❌ Data partition ${STORAGE_DEVICE}p2 not found"
-    echo "💡 Run setup-sd-card.sh first to create the partition layout"
-    echo "Available partitions:"
-    ls -la ${STORAGE_DEVICE}* 2>/dev/null || echo "No partitions found"
-    exit 1
-fi
-echo "✅ Data partition verified"
-
-# Format if needed
-if [ -b "${STORAGE_DEVICE}p2" ] && ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
-    echo "💾 Formatting data partition..."
-    mkfs.ext4 -F -L DATA ${STORAGE_DEVICE}p2
-fi
-
-# Mount data partition
-echo "📁 Mounting persistent storage..."
-mkdir -p $DATA_MOUNT
-if mount ${STORAGE_DEVICE}p2 $DATA_MOUNT; then
-    echo "✅ Storage mounted at $DATA_MOUNT"
-else
-    echo "❌ Failed to mount storage"
-    exit 1
-fi
-
-# Check if this is first boot (now that storage is mounted)
-if [ ! -f $DATA_MOUNT/.k3s-initialized ]; then
-    FIRST_BOOT=true
-    echo "🆕 First boot detected - performing full initialization"
-else
-    FIRST_BOOT=false
-    echo "🔄 Subsequent boot - performing quick setup"
-fi
-
-# Create directories only on first boot
-if [ "\$FIRST_BOOT" = "true" ]; then
-    echo "📂 Creating directories..."
-    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
-    
-    # Mark initialization as complete
-    echo "✅ First boot initialization complete at \$(date)" > $DATA_MOUNT/.k3s-initialized
-else
-    echo "📂 Directories already exist"
 fi
 
 # Set up bind mounts (always needed)
@@ -343,6 +297,8 @@ else
 fi
 
 if [ "\$FIRST_BOOT" = "true" ]; then
+    # Mark k3s initialization as complete
+    echo "\$(date): k3s initialization completed successfully" > $DATA_MOUNT/.k3s-initialized
     _logger "Alpine k3s first boot initialization complete"
     echo "✅ Alpine k3s first boot initialization complete"
 else
@@ -382,6 +338,12 @@ SCRIPT_EOF
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
     # CRITICAL: Enable local service so that local.d scripts execute
     ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
+    # CRITICAL: Enable networking service for network connectivity
+    ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
+    # Enable disk-setup service to run after system-bootstrap
+    ln -sf /etc/init.d/disk-setup "${NODE_NAME}-apkovl/etc/runlevels/default/disk-setup"
+    # Enable k3s-bootstrap service to run after disk-setup
+    ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
     # Create diagnostic script and fallback local.d bootstrap
     cat > "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start" << 'EOF'
@@ -494,43 +456,171 @@ _log "=== DEVICE SETUP COMPLETE ==="
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start"
     
-    # Create k3s bootstrap using local.d (simplified approach)
-    cat > "${NODE_NAME}-apkovl/etc/local.d/10-k3s-bootstrap.start" << 'EOF'
-#!/bin/sh
+    # Create k3s-bootstrap OpenRC service
+    cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap" << 'EOF'
+#!/sbin/openrc-run
 
-# Simple logger function
-_log() { echo "$*" | tee -a /var/log/messages 2>/dev/null || echo "$*"; }
+description="k3s cluster bootstrap service"
+name="k3s bootstrap"
 
-# k3s bootstrap using local.d
-_log "=== Starting k3s bootstrap via local.d ==="
+command="/usr/local/bin/k3s_bootstrap"
+command_background=false
+pidfile="/run/${RC_SVCNAME}.pid"
 
-# Check if bootstrap has already run successfully
-if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
-    _log "k3s bootstrap already completed - skipping"
-    exit 0
-fi
+depend() {
+    need disk-setup
+    after disk-setup
+    provide k3s-bootstrap
+}
 
-# Run the bootstrap script
-if [ -x /usr/local/bin/k3s_bootstrap ]; then
-    _log "Running k3s bootstrap for the first time..."
-    # Pipe bootstrap output to both stdout and syslog
-    if /usr/local/bin/k3s_bootstrap 2>&1 | while IFS= read -r line; do
-        _log "$line"
-    done; then
+start_pre() {
+    # Check if bootstrap has already run successfully
+    if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
+        einfo "k3s bootstrap already completed - skipping"
+        return 1
+    fi
+    
+    # Wait for disk-setup to complete
+    ebegin "Waiting for disk setup to complete"
+    local timeout=300  # 5 minutes max
+    local count=0
+    while [ $count -lt $timeout ]; do
+        if [ -f /mnt/data/.disk-setup-complete ]; then
+            eend 0 "Disk setup completed"
+            break
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    if [ $count -ge $timeout ]; then
+        eerror "Timeout waiting for disk setup to complete"
+        return 1
+    fi
+    
+    # Ensure the k3s_bootstrap script exists
+    if [ ! -x /usr/local/bin/k3s_bootstrap ]; then
+        eerror "k3s_bootstrap script not found at /usr/local/bin/k3s_bootstrap"
+        return 1
+    fi
+    
+    ebegin "Starting k3s bootstrap"
+    return 0
+}
+
+start() {
+    ebegin "Running k3s cluster bootstrap"
+    
+    # Run the bootstrap script and capture output
+    if /usr/local/bin/k3s_bootstrap; then
         # Mark bootstrap as complete only on successful execution
         mkdir -p /mnt/data 2>/dev/null || true
         echo "$(date): k3s bootstrap completed successfully" > /mnt/data/.k3s-bootstrap-complete
-        _log "k3s bootstrap completed successfully - marked as complete"
+        eend 0 "k3s bootstrap completed successfully"
     else
-        _log "k3s bootstrap failed - will retry on next boot"
-        exit 1
+        eend 1 "k3s bootstrap failed - will retry on next boot"
+        return 1
     fi
-else
-    _log "=== ERROR: k3s_bootstrap script not found ==="
-    exit 1
-fi
+}
+
+stop() {
+    ebegin "Stopping k3s bootstrap service"
+    # This service doesn't need to be stopped, it's a one-time run
+    eend 0
+}
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/10-k3s-bootstrap.start"
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
+    
+    # Create disk-setup OpenRC service
+    STORAGE_DEVICE=$(yaml_get "storage.device")
+    DATA_MOUNT=$(yaml_get "storage.data_mount")
+    cat > "${NODE_NAME}-apkovl/etc/init.d/disk-setup" << EOF
+#!/sbin/openrc-run
+
+description="Disk setup and persistent storage service"
+name="disk setup"
+
+depend() {
+    need system-bootstrap
+    after system-bootstrap
+    before k3s-bootstrap
+    provide disk-setup
+}
+
+start_pre() {
+    # Check if disk setup has already been completed
+    if [ -f /mnt/data/.disk-setup-complete ]; then
+        einfo "Disk setup already completed - skipping"
+        return 1
+    fi
+    
+    ebegin "Preparing disk setup"
+    return 0
+}
+
+start() {
+    ebegin "Setting up persistent storage"
+    
+    # Check for storage device
+    einfo "Checking for storage device $STORAGE_DEVICE..."
+    if [ ! -b "$STORAGE_DEVICE" ]; then
+        eerror "Storage device $STORAGE_DEVICE not found"
+        einfo "Available devices:"
+        ls -la /dev/mmc* /dev/sd* 2>/dev/null || einfo "No storage devices found"
+        eend 1 "Storage device not found"
+        return 1
+    fi
+    einfo "Storage device found"
+    
+    # Verify data partition exists (should be created by setup-sd-card.sh)
+    einfo "Verifying data partition..."
+    if [ ! -b "${STORAGE_DEVICE}p2" ]; then
+        eerror "Data partition ${STORAGE_DEVICE}p2 not found"
+        einfo "Run setup-sd-card.sh first to create the partition layout"
+        einfo "Available partitions:"
+        ls -la ${STORAGE_DEVICE}* 2>/dev/null || einfo "No partitions found"
+        eend 1 "Data partition not found"
+        return 1
+    fi
+    einfo "Data partition verified"
+    
+    # Format if needed
+    if [ -b "${STORAGE_DEVICE}p2" ] && ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
+        einfo "Formatting data partition..."
+        if mkfs.ext4 -F -L DATA ${STORAGE_DEVICE}p2; then
+            einfo "Data partition formatted successfully"
+        else
+            eend 1 "Failed to format data partition"
+            return 1
+        fi
+    fi
+    
+    # Mount data partition
+    einfo "Mounting persistent storage..."
+    mkdir -p $DATA_MOUNT
+    if mount ${STORAGE_DEVICE}p2 $DATA_MOUNT; then
+        einfo "Storage mounted at $DATA_MOUNT"
+    else
+        eend 1 "Failed to mount storage"
+        return 1
+    fi
+    
+    # Create directories for k3s
+    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
+    
+    # Mark disk setup as complete
+    echo "\$(date): Disk setup completed successfully" > $DATA_MOUNT/.disk-setup-complete
+    
+    eend 0 "Persistent storage setup complete"
+}
+
+stop() {
+    ebegin "Unmounting persistent storage"
+    umount $DATA_MOUNT 2>/dev/null || true
+    eend 0
+}
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/disk-setup"
     
     # Create simple console notification (no longer needed with proper OpenRC service)
     # The k3s-bootstrap service handles all console output
