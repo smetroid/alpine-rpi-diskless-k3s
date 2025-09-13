@@ -286,22 +286,30 @@ else
     log "SSH service is already running"
 fi
 
-## Fix SSH OpenSSL version mismatch by ensuring fresh installation
-#_logger "Setting up SSH with fresh OpenSSL"
-#echo "🔑 Setting up SSH with fresh OpenSSL..."
-#apk del openssh-server openssh 2>/dev/null || true
-#_apk add openssh-server
-#_apk add openssh
-#
-## Generate fresh SSH host keys to avoid OpenSSL version issues
-#rm -f /etc/ssh/ssh_host_*_key*
-## Generate only the key types we use (skip deprecated DSA)
-#ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key -N "" -q
-#ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -N "" -q  
-#ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
-#
-#rc-update add sshd default
-#rc-update add savecache shutdown
+# Fix SSH OpenSSL version mismatch by ensuring fresh installation
+_logger "Setting up SSH with fresh OpenSSL"
+echo "🔑 Setting up SSH with fresh OpenSSL..."
+apk del openssh-server openssh 2>/dev/null || true
+_apk add openssh-server
+_apk add openssh
+
+# Generate fresh SSH host keys to avoid OpenSSL version issues
+rm -f /etc/ssh/ssh_host_*_key*
+# Generate only the key types we use (skip deprecated DSA)
+ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key -N "" -q
+ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -N "" -q  
+ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
+
+# Fix ownership of SSH files (critical for SSH security)
+_logger "Fixing SSH file ownership and permissions"
+echo "🔐 Setting proper SSH file ownership..."
+chown -R root:root /root /etc/ssh
+chmod 700 /root/.ssh 2>/dev/null || true
+chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
+
+rc-update add sshd default
+rc-update add savecache shutdown
 
 # Configure LBU (Local Backup Utility)
 lbu_media=/mnt/data
