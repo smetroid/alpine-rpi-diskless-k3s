@@ -203,10 +203,12 @@ _logger "Starting Alpine diskless system initialization"
 # Create trash directory for tracking
 mkdir -p /tmp/.trash
 
-# Check if system initialization is already complete
-if [ -f /usr/local/bin/.system-initialized ]; then
+# Check if system initialization is already complete (persistent check)
+if [ -f /mnt/data/.system-initialized ]; then
     _logger "System already initialized, skipping package installation"
     echo "✅ System already initialized, skipping package installation"
+    # Create RAM marker for this boot session
+    touch /usr/local/bin/.system-initialized
     exit 0
 fi
 
@@ -242,6 +244,12 @@ EOF
 _logger "Setting timezone to $ALPINE_TIMEZONE"
 echo "⏰ Setting timezone to $ALPINE_TIMEZONE..."
 setup-timezone -z $ALPINE_TIMEZONE
+
+# Ensure /etc/timezone file is created
+if [ ! -f /etc/timezone ]; then
+    echo "$ALPINE_TIMEZONE" > /etc/timezone
+    _logger "Created /etc/timezone with $ALPINE_TIMEZONE"
+fi
 EOF
     fi
     
@@ -312,14 +320,35 @@ rc-update add sshd default
 rc-update add savecache shutdown
 
 # Configure LBU (Local Backup Utility)
-lbu_media=/mnt/data
-echo "\$lbu_media" > /etc/lbu/lbu.conf
+cat > /etc/lbu/lbu.conf << 'LBU_CONF_EOF'
+LBU_BACKUPDIR=/mnt/data
+BACKUP_PREFIX=runtime
+LBU_CONF_EOF
 
-# Mark system initialization as complete
+# Configure what files LBU should include in backups
+cat > /etc/lbu/include << 'LBU_EOF'
+etc/hostname
+etc/hosts
+etc/resolv.conf
+etc/network/interfaces
+etc/ssh/ssh_host_*
+etc/apk/repositories
+etc/modules
+etc/sysctl.d/*
+etc/timezone
+etc/localtime
+root/.ssh/authorized_keys
+LBU_EOF
+
+# Mark system initialization as complete (both RAM and persistent storage)
 touch /usr/local/bin/.system-initialized
+touch /mnt/data/.system-initialized
 
 _logger "System initialization complete"
 echo "✅ System: Packages and timezone configured" > /dev/console
+
+# Commit the overlay to save installed packages
+lbu commit
 
 exit 0
 SCRIPT_EOF

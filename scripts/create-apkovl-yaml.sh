@@ -219,9 +219,9 @@ mkdir -p /tmp/.trash
 echo "⏳ Waiting for system to stabilize..."
 sleep 10
 
-# Verify that disk-setup service has completed
-if [ ! -f $DATA_MOUNT/.disk-setup-complete ]; then
-    echo "❌ Disk setup not completed. disk-setup service should run first."
+# Verify that storage-init service has completed
+if [ ! -f $DATA_MOUNT/.storage-init-complete ]; then
+    echo "❌ Storage initialization not completed. storage-init service should run first."
     exit 1
 fi
 echo "✅ Disk setup verified - storage is ready"
@@ -250,7 +250,17 @@ fi
 
 # Set up bind mounts (always needed)
 echo "🔗 Setting up bind mounts..."
-mkdir -p /etc/k3s /var/lib/k3s
+mkdir -p /etc/k3s /var/lib/rancher/k3s
+
+# Ensure persistent k3s directories exist
+mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/var-lib-rancher-k3s
+
+# Copy overlay config to persistent storage if it doesn't exist there
+if [ -f /etc/k3s/config.yaml ] && [ ! -f $DATA_MOUNT/k3s/config.yaml ]; then
+    echo "📋 Copying overlay k3s config to persistent storage..."
+    cp /etc/k3s/config.yaml $DATA_MOUNT/k3s/config.yaml
+    echo "✅ k3s config copied to persistent storage"
+fi
 
 # Idempotent bind mounts - only mount if not already mounted
 if ! mountpoint -q /etc/k3s 2>/dev/null; then
@@ -260,11 +270,11 @@ else
     echo "✅ /etc/k3s already mounted"
 fi
 
-if ! mountpoint -q /var/lib/k3s 2>/dev/null; then
-    echo "📎 Mounting /var/lib/k3s..."
-    mount --bind $DATA_MOUNT/var-lib-k3s /var/lib/k3s
+if ! mountpoint -q /var/lib/rancher/k3s 2>/dev/null; then
+    echo "📎 Mounting /var/lib/rancher/k3s..."
+    mount --bind $DATA_MOUNT/var-lib-rancher-k3s /var/lib/rancher/k3s
 else
-    echo "✅ /var/lib/k3s already mounted"
+    echo "✅ /var/lib/rancher/k3s already mounted"
 fi
 
 # Install k3s if not present
@@ -340,121 +350,12 @@ SCRIPT_EOF
     ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
     # CRITICAL: Enable networking service for network connectivity
     ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
-    # Enable disk-setup service to run after system-bootstrap
-    ln -sf /etc/init.d/disk-setup "${NODE_NAME}-apkovl/etc/runlevels/default/disk-setup"
-    # Enable k3s-bootstrap service to run after disk-setup
+    # Enable storage-init service to run before system-bootstrap
+    ln -sf /etc/init.d/storage-init "${NODE_NAME}-apkovl/etc/runlevels/default/storage-init"
+    # Enable k3s-bootstrap service to run after storage-init
     ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
-    # Create diagnostic script and fallback local.d bootstrap
-    cat > "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start" << 'EOF'
-#!/bin/sh
-# Test execution and QEMU device simulation script
-
-# Enhanced logger functions
-_log() { echo "$*" | tee -a /var/log/messages 2>/dev/null || echo "$*"; }
-_success() { echo "✅ $*" | tee -a /var/log/messages 2>/dev/null || echo "✅ $*"; }
-_error() { echo "❌ $*" | tee -a /var/log/messages 2>/dev/null || echo "❌ $*"; }
-
-_log "=== DIAGNOSTIC: local.d scripts ARE executing ==="
-_log "=== DIAGNOSTIC: Time: $(date) ==="
-_log "=== DIAGNOSTIC: Hostname: $(hostname) ==="
-_log "=== DIAGNOSTIC: Available services: $(rc-status -a 2>/dev/null | wc -l) ==="
-
-# QEMU Detection and Device Simulation
-_log "=== QEMU DETECTION AND DEVICE SETUP ==="
-
-# Check if we're running in QEMU (look for QEMU-specific devices)
-QEMU_DETECTED=false
-if [ -b /dev/sda ] || [ -b /dev/vda ] || grep -q "QEMU" /proc/cpuinfo 2>/dev/null; then
-    QEMU_DETECTED=true
-    _log "🖥️  QEMU environment detected - setting up device simulation"
-fi
-
-if [ "$QEMU_DETECTED" = "true" ]; then
-    # Determine which storage device is available
-    STORAGE_DEV=""
-    if [ -b /dev/sda ]; then
-        STORAGE_DEV="/dev/sda"
-        _log "Using /dev/sda for storage simulation"
-    elif [ -b /dev/vda ]; then
-        STORAGE_DEV="/dev/vda" 
-        _log "Using /dev/vda for storage simulation"
-    fi
-    
-    if [ -n "$STORAGE_DEV" ]; then
-        _success "Storage device: $STORAGE_DEV detected"
-        
-        # Check for reboot detection - look for system initialization marker
-        SYSTEM_INITIALIZED=false
-        mkdir -p /tmp/mnt_check 2>/dev/null || true
-        
-        # Try to mount data partition to check for initialization marker
-        if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-            if [ -f "/tmp/mnt_check/.system-initialized" ]; then
-                SYSTEM_INITIALIZED=true
-                _log "🔄 System reboot detected - initialization marker found"
-            fi
-            umount /tmp/mnt_check 2>/dev/null || true
-        fi
-        
-        if [ "$SYSTEM_INITIALIZED" = "false" ]; then
-            # First boot - partition the storage device to simulate SD card
-            _log "🆕 First boot detected - setting up storage partitions (simulating Pi SD card)..."
-            (echo n; echo p; echo 1; echo; echo +256M; echo n; echo p; echo 2; echo; echo; echo t; echo 1; echo c; echo w) | fdisk "$STORAGE_DEV" >/dev/null 2>&1 || true
-            sleep 2
-            
-            # Ensure kernel recognizes partitions
-            partprobe "$STORAGE_DEV" 2>/dev/null || true
-            sleep 1
-            
-            # Format the data partition
-            _log "Formatting data partition..."
-            mkfs.ext4 -F "${STORAGE_DEV}2" >/dev/null 2>&1 || true
-            
-            # Mount and create initialization marker
-            if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-                echo "$(date): System initialized on first boot" > /tmp/mnt_check/.system-initialized
-                umount /tmp/mnt_check 2>/dev/null || true
-                _success "System initialization marker created"
-            fi
-        else
-            _log "🔄 Reboot detected - skipping partitioning, ensuring device nodes exist"
-        fi
-        
-        # Always ensure device nodes exist (needed for both first boot and reboots)
-        _log "Creating/ensuring Raspberry Pi device simulation..."
-        if [ -b "${STORAGE_DEV}1" ] && [ -b "${STORAGE_DEV}2" ]; then
-            mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
-            mknod /dev/mmcblk0p1 b $(stat -c "%t %T" "${STORAGE_DEV}1") 2>/dev/null || true
-            mknod /dev/mmcblk0p2 b $(stat -c "%t %T" "${STORAGE_DEV}2") 2>/dev/null || true
-            _success "Raspberry Pi SD card simulation: /dev/mmcblk0 (/dev/mmcblk0p1, /dev/mmcblk0p2)"
-        else
-            # Fallback device creation with fixed major/minor numbers
-            _log "Partitions not detected, using fallback device creation..."
-            mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
-            mknod /dev/mmcblk0p1 b 8 1 2>/dev/null || true
-            mknod /dev/mmcblk0p2 b 8 2 2>/dev/null || true
-            _success "SD card devices created (fallback method)"
-        fi
-        
-        # Verify device creation
-        _log "Verifying created devices:"
-        ls -la /dev/mmcblk0* 2>/dev/null | while IFS= read -r line; do
-            _log "  $line"
-        done
-        
-        # Cleanup temporary mount point
-        rmdir /tmp/mnt_check 2>/dev/null || true
-    else
-        _error "No suitable storage device found for QEMU simulation"
-    fi
-else
-    _log "🥧 Real Raspberry Pi environment detected - using native mmcblk0 devices"
-fi
-
-_log "=== DEVICE SETUP COMPLETE ==="
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/00-test-execution.start"
+    # Note: QEMU test device setup moved to test-alpine-diskless-boot.sh
     
     # Create k3s-bootstrap OpenRC service
     cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap" << 'EOF'
@@ -468,8 +369,8 @@ command_background=false
 pidfile="/run/${RC_SVCNAME}.pid"
 
 depend() {
-    need disk-setup
-    after disk-setup
+    need system-bootstrap
+    after system-bootstrap
     provide k3s-bootstrap
 }
 
@@ -480,13 +381,13 @@ start_pre() {
         return 1
     fi
     
-    # Wait for disk-setup to complete
-    ebegin "Waiting for disk setup to complete"
+    # Wait for storage-init to complete
+    ebegin "Waiting for storage initialization to complete"
     local timeout=300  # 5 minutes max
     local count=0
     while [ $count -lt $timeout ]; do
-        if [ -f /mnt/data/.disk-setup-complete ]; then
-            eend 0 "Disk setup completed"
+        if [ -f /mnt/data/.storage-init-complete ]; then
+            eend 0 "Storage initialization completed"
             break
         fi
         sleep 1
@@ -531,30 +432,30 @@ stop() {
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
     
-    # Create disk-setup OpenRC service
+    # Create storage-init OpenRC service
     STORAGE_DEVICE=$(yaml_get "storage.device")
     DATA_MOUNT=$(yaml_get "storage.data_mount")
-    cat > "${NODE_NAME}-apkovl/etc/init.d/disk-setup" << EOF
+    cat > "${NODE_NAME}-apkovl/etc/init.d/storage-init" << EOF
 #!/sbin/openrc-run
 
-description="Disk setup and persistent storage service"
-name="disk setup"
+description="Storage initialization and persistent storage service"
+name="storage init"
 
 depend() {
-    need system-bootstrap
-    after system-bootstrap
-    before k3s-bootstrap
-    provide disk-setup
+    need localmount
+    after localmount
+    before system-bootstrap k3s-bootstrap
+    provide storage-init
 }
 
 start_pre() {
-    # Check if disk setup has already been completed
-    if [ -f /mnt/data/.disk-setup-complete ]; then
-        einfo "Disk setup already completed - skipping"
+    # Check if storage initialization has already been completed
+    if [ -f /mnt/data/.storage-init-complete ]; then
+        einfo "Storage initialization already completed - skipping"
         return 1
     fi
     
-    ebegin "Preparing disk setup"
+    ebegin "Preparing storage initialization"
     return 0
 }
 
@@ -605,11 +506,44 @@ start() {
         return 1
     fi
     
-    # Create directories for k3s
-    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s
+    # Create directories for k3s, APK cache, LBU config, and usr/local/bin
+    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s $DATA_MOUNT/var-cache-apk $DATA_MOUNT/etc-lbu $DATA_MOUNT/usr-local-bin
     
-    # Mark disk setup as complete
-    echo "\$(date): Disk setup completed successfully" > $DATA_MOUNT/.disk-setup-complete
+    # Set up APK cache bind mount to persistent storage
+    if ! mountpoint -q /var/cache/apk 2>/dev/null; then
+        einfo "Setting up APK cache on persistent storage"
+        mount --bind $DATA_MOUNT/var-cache-apk /var/cache/apk
+        eend \$? "APK cache mount"
+    fi
+    
+    # Set up LBU config bind mount to persistent storage
+    if ! mountpoint -q /etc/lbu 2>/dev/null; then
+        einfo "Setting up LBU config on persistent storage"
+        # Copy overlay LBU config to persistent storage if it doesn't exist
+        if [ -d /etc/lbu ] && [ ! -f $DATA_MOUNT/etc-lbu/lbu.conf ]; then
+            cp -a /etc/lbu/* $DATA_MOUNT/etc-lbu/ 2>/dev/null || true
+        fi
+        mount --bind $DATA_MOUNT/etc-lbu /etc/lbu
+        eend \$? "LBU config mount"
+    fi
+    
+    # Set up /usr/local/bin bind mount to persistent storage
+    if ! mountpoint -q /usr/local/bin 2>/dev/null; then
+        einfo "Setting up /usr/local/bin on persistent storage"
+        # Copy overlay files from /usr/local/bin to persistent storage if they don't exist
+        if [ -d /usr/local/bin ]; then
+            for file in /usr/local/bin/*; do
+                if [ -f "\$file" ] && [ ! -f "$DATA_MOUNT/usr-local-bin/\$(basename "\$file")" ]; then
+                    cp -a "\$file" $DATA_MOUNT/usr-local-bin/
+                fi
+            done
+        fi
+        mount --bind $DATA_MOUNT/usr-local-bin /usr/local/bin
+        eend \$? "/usr/local/bin mount"
+    fi
+    
+    # Mark storage initialization as complete
+    echo "\$(date): Storage initialization completed successfully" > $DATA_MOUNT/.storage-init-complete
     
     eend 0 "Persistent storage setup complete"
 }
@@ -620,7 +554,7 @@ stop() {
     eend 0
 }
 EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/init.d/disk-setup"
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/storage-init"
     
     # Create simple console notification (no longer needed with proper OpenRC service)
     # The k3s-bootstrap service handles all console output
