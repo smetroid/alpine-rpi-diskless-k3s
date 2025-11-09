@@ -264,34 +264,34 @@ rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
 
-log "=== Setting up SSH access ==="
+_logger "=== Setting up SSH access ==="
 
 # Install and enable SSH
 if ! rc-service sshd status >/dev/null 2>&1; then
-    log "Installing OpenSSH..."
+    _logger "Installing OpenSSH..."
     if apk add --no-cache openssh; then
-        log "OpenSSH installed successfully"
+        _logger "OpenSSH installed successfully"
         
-        log "Generating SSH host keys..."
+        _logger "Generating SSH host keys..."
         if ssh-keygen -A; then
-            log "SSH host keys generated"
+            _logger "SSH host keys generated"
         else
-            log "WARNING: Failed to generate SSH host keys"
+            _logger "WARNING: Failed to generate SSH host keys"
         fi
         
-        log "Enabling SSH service..."
+        _logger "Enabling SSH service..."
         if rc-update add sshd default && rc-service sshd start; then
-            log "SSH service enabled and started"
+            _logger "SSH service enabled and started"
         else
-            log "ERROR: Failed to enable SSH service"
+            _logger "ERROR: Failed to enable SSH service"
             exit 1
         fi
     else
-        log "ERROR: Failed to install OpenSSH"
+        _logger "ERROR: Failed to install OpenSSH"
         exit 1
     fi
 else
-    log "SSH service is already running"
+    _logger "SSH service is already running"
 fi
 
 # Fix SSH OpenSSL version mismatch by ensuring fresh installation
