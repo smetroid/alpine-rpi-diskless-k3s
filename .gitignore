@@ -12,6 +12,7 @@
 # Build outputs and generated files
 builds/
 k3s-token.txt
+.worktrees/
 
 # macOS system files
 .DS_Store
