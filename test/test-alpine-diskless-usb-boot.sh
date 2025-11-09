@@ -345,10 +345,10 @@ build_qemu_command() {
     # Determine QEMU binary
     if [ "$ARCH" = "aarch64" ]; then
         QEMU_BIN="qemu-system-aarch64"
-        QEMU_MACHINE="-machine virt -cpu cortex-a72"
+        QEMU_MACHINE=("-machine" "virt" "-cpu" "cortex-a72")
     else
         QEMU_BIN="qemu-system-x86_64"
-        QEMU_MACHINE="-machine q35"
+        QEMU_MACHINE=("-machine" "q35")
     fi
 
     # Build base options
@@ -357,12 +357,12 @@ build_qemu_command() {
         "-m" "$RAM_SIZE"
         "-cdrom" "$alpine_iso"
         "-boot" "d"
-        $QEMU_MACHINE
+        "${QEMU_MACHINE[@]}"
     )
 
     # Add USB drive with selected interface
-    USB_DRIVE_OPTS=$(build_qemu_drive_opts "$usb_disk" "$usb_interface")
-    QEMU_CMD+=($USB_DRIVE_OPTS)
+    read -ra USB_DRIVE_OPTS <<< "$(build_qemu_drive_opts "$usb_disk" "$usb_interface")"
+    QEMU_CMD+=("${USB_DRIVE_OPTS[@]}")
 
     # Add overlay
     QEMU_CMD+=("-drive" "file=fat:rw:$overlay_dir,format=raw")
