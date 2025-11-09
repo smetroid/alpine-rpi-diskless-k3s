@@ -113,6 +113,65 @@ cleanup_loop_device() {
     fi
 }
 
+determine_qemu_usb_interface() {
+    local interface="${1:-auto}"
+
+    if [ "$interface" != "auto" ]; then
+        echo "$interface"
+        return 0
+    fi
+
+    # Auto-detection: try different interfaces in order of preference
+    # Preference order based on common USB storage behavior
+    # 1. SCSI - most USB storage appears as SCSI devices
+    # 2. USB - direct USB storage emulation
+    # 3. virtio - fast paravirtualized storage
+
+    echo "scsi"  # Start with SCSI as default
+}
+
+build_qemu_drive_opts() {
+    local disk_path="$1"
+    local interface="$2"
+
+    case "$interface" in
+        scsi)
+            echo "-drive file=$disk_path,format=raw,if=scsi"
+            ;;
+        usb)
+            echo "-drive file=$disk_path,format=raw,if=usb"
+            ;;
+        virtio)
+            echo "-drive file=$disk_path,format=raw,if=virtio"
+            ;;
+        usb-storage)
+            echo "-drive id=usbdrive,file=$disk_path,format=raw,if=none -device usb-storage,drive=usbdrive"
+            ;;
+        *)
+            error "Unknown interface: $interface"
+            ;;
+    esac
+}
+
+show_expected_devices() {
+    local interface="$1"
+
+    echo ""
+    echo "🔍 Expected device naming for interface: $interface"
+    case "$interface" in
+        scsi)
+            echo "   Device: /dev/sda (partitions: /dev/sda1, /dev/sda2)"
+            ;;
+        usb|usb-storage)
+            echo "   Device: /dev/sda or /dev/sdb (partitions: /dev/sdX1, /dev/sdX2)"
+            ;;
+        virtio)
+            echo "   Device: /dev/vda (partitions: /dev/vda1, /dev/vda2)"
+            ;;
+    esac
+    echo ""
+}
+
 echo "🔌 Alpine Linux USB Boot Simulation"
 echo "====================================="
 echo ""
@@ -129,3 +188,25 @@ partition_usb_disk "$USB_DISK"
 
 # Cleanup on exit
 trap cleanup_loop_device EXIT
+
+# Test interface determination
+log "Determining QEMU USB interface configuration..."
+USB_IF=$(determine_qemu_usb_interface "$USB_INTERFACE")
+log "Selected interface: $USB_IF"
+
+case "$USB_IF" in
+    scsi)
+        log "Using SCSI interface (USB storage typically appears as SCSI)"
+        ;;
+    usb)
+        log "Using USB interface (direct USB emulation)"
+        ;;
+    virtio)
+        log "Using virtio interface (paravirtualized storage)"
+        ;;
+    usb-storage)
+        log "Using explicit USB storage device"
+        ;;
+esac
+
+show_expected_devices "$USB_IF"
