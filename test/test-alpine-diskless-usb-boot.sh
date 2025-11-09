@@ -172,6 +172,164 @@ show_expected_devices() {
     echo ""
 }
 
+download_alpine() {
+    local version="$1"
+    local arch="$2"
+    local vm_dir="$3"
+
+    local alpine_iso
+    local download_url
+
+    if [ "$arch" = "aarch64" ]; then
+        alpine_iso="alpine-rpi-${version}-aarch64.tar.gz"
+        download_url="https://dl-cdn.alpinelinux.org/alpine/v$(echo "$version" | cut -d. -f1,2)/releases/aarch64/${alpine_iso}"
+    else
+        alpine_iso="alpine-virt-${version}-x86_64.iso"
+        download_url="https://dl-cdn.alpinelinux.org/alpine/v$(echo "$version" | cut -d. -f1,2)/releases/x86_64/${alpine_iso}"
+    fi
+
+    if [ -f "$vm_dir/$alpine_iso" ]; then
+        log "Alpine ISO already exists: $alpine_iso"
+    else
+        log "Downloading Alpine Linux $arch..."
+        (cd "$vm_dir" && curl -L "$download_url" -o "$alpine_iso") || error "Failed to download Alpine"
+        success "Alpine downloaded: $alpine_iso"
+    fi
+
+    echo "$vm_dir/$alpine_iso"
+}
+
+find_apkovl() {
+    local project_dir="$1"
+
+    log "Searching for apkovl files..." >&2
+
+    # Look for any k3s-*.apkovl.tar.gz in builds/
+    for apkovl in "$project_dir"/builds/k3s-*.apkovl.tar.gz; do
+        if [ -f "$apkovl" ]; then
+            log "Found: $(basename "$apkovl")" >&2
+            echo "$apkovl"
+            return 0
+        fi
+    done
+
+    error "No apkovl files found. Run: ./build-from-yaml.sh k3s.yaml"
+}
+
+create_usb_device_service() {
+    local apkovl_dir="$1"
+
+    log "Creating USB device setup service..."
+
+    cat > "${apkovl_dir}/etc/init.d/usb-device-setup" << 'EOF'
+#!/sbin/openrc-run
+
+description="USB device setup for Pi 4/5 boot testing"
+name="usb device setup"
+
+depend() {
+    need localmount
+    before system-bootstrap
+    provide usb-device-setup
+}
+
+start() {
+    ebegin "Setting up USB boot device detection"
+
+    # Install required tools
+    apk add e2fsprogs >/dev/null 2>&1 || true
+
+    # Log helper
+    _log() { logger -t "usb-device-setup" "$*" 2>/dev/null || echo "$*"; }
+
+    _log "=== USB BOOT DEVICE DETECTION ==="
+
+    # Detect USB storage device
+    USB_DEV=""
+    for dev in /dev/sda /dev/sdb /dev/vda; do
+        if [ -b "$dev" ]; then
+            USB_DEV="$dev"
+            _log "Found storage device: $USB_DEV"
+            break
+        fi
+    done
+
+    if [ -z "$USB_DEV" ]; then
+        eerror "No USB storage device found"
+        eend 1
+        return 1
+    fi
+
+    # Check if already initialized
+    mkdir -p /tmp/usb_check
+    INITIALIZED=false
+
+    if mount -t ext4 "${USB_DEV}2" /tmp/usb_check 2>/dev/null; then
+        if [ -f "/tmp/usb_check/.usb-initialized" ]; then
+            INITIALIZED=true
+            _log "USB device already initialized"
+        fi
+        umount /tmp/usb_check
+    fi
+
+    if [ "$INITIALIZED" = "false" ]; then
+        _log "First boot - initializing USB device..."
+
+        # Format data partition
+        _log "Formatting ${USB_DEV}2 as ext4..."
+        mkfs.ext4 -F "${USB_DEV}2" >/dev/null 2>&1 || true
+
+        # Create initialization marker
+        if mount -t ext4 "${USB_DEV}2" /tmp/usb_check 2>/dev/null; then
+            echo "$(date): USB device initialized" > /tmp/usb_check/.usb-initialized
+            umount /tmp/usb_check
+            _log "Initialization complete"
+        fi
+    fi
+
+    rmdir /tmp/usb_check 2>/dev/null || true
+
+    _log "=== USB DEVICE SETUP COMPLETE ==="
+    _log "USB storage ready at $USB_DEV"
+
+    eend 0
+}
+EOF
+
+    chmod +x "${apkovl_dir}/etc/init.d/usb-device-setup"
+    mkdir -p "${apkovl_dir}/etc/runlevels/default"
+    ln -sf /etc/init.d/usb-device-setup "${apkovl_dir}/etc/runlevels/default/usb-device-setup"
+
+    success "USB device setup service created"
+}
+
+prepare_overlay() {
+    local apkovl_path="$1"
+    local vm_dir="$2"
+
+    log "Preparing overlay from: $(basename "$apkovl_path")" >&2
+
+    local overlay_dir="$vm_dir/overlay"
+    local temp_overlay="$vm_dir/temp-overlay"
+
+    rm -rf "$overlay_dir" "$temp_overlay"
+    mkdir -p "$overlay_dir" "$temp_overlay"
+
+    # Extract original overlay
+    (cd "$temp_overlay" && tar -xzf "$apkovl_path") || error "Failed to extract apkovl"
+
+    # Add USB device setup service
+    create_usb_device_service "$temp_overlay" >&2
+
+    # Repack overlay
+    (cd "$temp_overlay" && tar -czf "$overlay_dir/usb-boot.apkovl.tar.gz" etc usr root var 2>/dev/null) || error "Failed to repack overlay"
+
+    rm -rf "$temp_overlay"
+
+    success "Overlay prepared: $overlay_dir/usb-boot.apkovl.tar.gz" >&2
+    echo "$overlay_dir"
+}
+
 echo "🔌 Alpine Linux USB Boot Simulation"
 echo "====================================="
 echo ""
@@ -210,3 +368,10 @@ case "$USB_IF" in
 esac
 
 show_expected_devices "$USB_IF"
+
+# Download Alpine
+ALPINE_ISO=$(download_alpine "$ALPINE_VERSION" "$ARCH" "$VM_DIR")
+
+# Find and prepare apkovl
+APKOVL=$(find_apkovl "$PROJECT_DIR")
+OVERLAY_DIR=$(prepare_overlay "$APKOVL" "$VM_DIR")
