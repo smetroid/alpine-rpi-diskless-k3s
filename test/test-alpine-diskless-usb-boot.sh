@@ -20,6 +20,41 @@ mkdir -p "$VM_DIR"
 
 USB_DISK="$VM_DIR/usb-drive.img"
 
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Alpine diskless k3s USB boot testing for Raspberry Pi 4 and Pi 5
+
+OPTIONS:
+    RAM_SIZE=<size>          RAM allocation (default: 512M)
+    ALPINE_VERSION=<ver>     Alpine version (default: 3.22.1)
+    ARCH=<arch>              Architecture: x86_64 or aarch64 (default: x86_64)
+    HEADLESS=<bool>          Headless mode (default: false)
+    USB_INTERFACE=<type>     USB interface: auto, scsi, usb, virtio, usb-storage (default: auto)
+
+EXAMPLES:
+    # Basic test with SCSI interface
+    ./test/test-alpine-diskless-usb-boot.sh
+
+    # Test with explicit USB interface
+    USB_INTERFACE=usb ./test/test-alpine-diskless-usb-boot.sh
+
+    # Headless mode for automation
+    HEADLESS=true ./test/test-alpine-diskless-usb-boot.sh
+
+    # ARM64 testing
+    ARCH=aarch64 ./test/test-alpine-diskless-usb-boot.sh
+
+EOF
+    exit 0
+}
+
+# Check for help flag
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    usage
+fi
+
 # --- Logging setup ---
 SCRIPT_NAME=$(basename "$0")
 LOG_FILE="$TEST_DIR/usb-boot-test.log"
@@ -459,3 +494,27 @@ QEMU_CMD=$(build_qemu_command "$ALPINE_ISO" "$USB_DISK" "$USB_IF" "$OVERLAY_DIR"
 
 # Run test
 run_qemu_test "$QEMU_CMD"
+
+echo ""
+echo "✅ USB Boot Test Complete"
+echo ""
+echo "💡 Validation Steps:"
+echo ""
+echo "1. Check USB device detection:"
+echo "   # ls -la /dev/sd*"
+echo "   # dmesg | grep -i usb"
+echo ""
+echo "2. Verify services:"
+echo "   # rc-status"
+echo "   # rc-service usb-device-setup status"
+echo "   # rc-service k3s-bootstrap status"
+echo ""
+echo "3. Check k3s status:"
+echo "   # kubectl get nodes"
+echo "   # kubectl get pods -A"
+echo ""
+echo "4. Test different USB interfaces:"
+echo "   USB_INTERFACE=scsi ./test/test-alpine-diskless-usb-boot.sh"
+echo "   USB_INTERFACE=usb ./test/test-alpine-diskless-usb-boot.sh"
+echo "   USB_INTERFACE=virtio ./test/test-alpine-diskless-usb-boot.sh"
+echo ""
