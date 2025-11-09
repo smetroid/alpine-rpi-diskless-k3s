@@ -116,7 +116,10 @@ cleanup_loop_device() {
 determine_qemu_usb_interface() {
     local interface="${1:-auto}"
 
+    log "Determining QEMU USB interface configuration..." >&2
+
     if [ "$interface" != "auto" ]; then
+        log "Using manual interface: $interface" >&2
         echo "$interface"
         return 0
     fi
@@ -127,6 +130,7 @@ determine_qemu_usb_interface() {
     # 2. USB - direct USB storage emulation
     # 3. virtio - fast paravirtualized storage
 
+    log "Auto-detecting best USB interface configuration..." >&2
     echo "scsi"  # Start with SCSI as default
 }
 
@@ -189,11 +193,11 @@ download_alpine() {
     fi
 
     if [ -f "$vm_dir/$alpine_iso" ]; then
-        log "Alpine ISO already exists: $alpine_iso"
+        log "Alpine ISO already exists: $alpine_iso" >&2
     else
-        log "Downloading Alpine Linux $arch..."
+        log "Downloading Alpine Linux $arch..." >&2
         (cd "$vm_dir" && curl -L "$download_url" -o "$alpine_iso") || error "Failed to download Alpine"
-        success "Alpine downloaded: $alpine_iso"
+        success "Alpine downloaded: $alpine_iso" >&2
     fi
 
     echo "$vm_dir/$alpine_iso"
@@ -330,6 +334,96 @@ prepare_overlay() {
     echo "$overlay_dir"
 }
 
+build_qemu_command() {
+    local alpine_iso="$1"
+    local usb_disk="$2"
+    local usb_interface="$3"
+    local overlay_dir="$4"
+
+    log "Building QEMU command..." >&2
+
+    # Determine QEMU binary
+    if [ "$ARCH" = "aarch64" ]; then
+        QEMU_BIN="qemu-system-aarch64"
+        QEMU_MACHINE="-machine virt -cpu cortex-a72"
+    else
+        QEMU_BIN="qemu-system-x86_64"
+        QEMU_MACHINE="-machine q35"
+    fi
+
+    # Build base options
+    QEMU_CMD=(
+        "$QEMU_BIN"
+        "-m" "$RAM_SIZE"
+        "-cdrom" "$alpine_iso"
+        "-boot" "d"
+        $QEMU_MACHINE
+    )
+
+    # Add USB drive with selected interface
+    USB_DRIVE_OPTS=$(build_qemu_drive_opts "$usb_disk" "$usb_interface")
+    QEMU_CMD+=($USB_DRIVE_OPTS)
+
+    # Add overlay
+    QEMU_CMD+=("-drive" "file=fat:rw:$overlay_dir,format=raw")
+
+    # Add network (simple user-mode for single node)
+    QEMU_CMD+=(
+        "-netdev" "user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,dns=1.1.1.1"
+        "-device" "virtio-net-pci,netdev=net0"
+    )
+
+    # Add headless options
+    if [ "$HEADLESS" = "true" ]; then
+        QEMU_CMD+=("-nographic" "-serial" "mon:stdio")
+    fi
+
+    echo "${QEMU_CMD[@]}"
+}
+
+show_test_info() {
+    local usb_interface="$1"
+
+    echo ""
+    echo "🚀 USB Boot Test Configuration:"
+    echo "   Architecture: $ARCH"
+    echo "   RAM: $RAM_SIZE"
+    echo "   USB Interface: $usb_interface"
+    echo "   Headless: $HEADLESS"
+    echo ""
+
+    show_expected_devices "$usb_interface"
+
+    echo "📝 Test Access:"
+    echo "   SSH: ssh root@localhost -p 2222"
+    echo "   k3s API: localhost:6443"
+    echo ""
+    echo "🎯 Success Criteria:"
+    echo "   1. Alpine boots from USB"
+    echo "   2. USB device detected and initialized"
+    echo "   3. system-bootstrap completes"
+    echo "   4. k3s-bootstrap completes"
+    echo "   5. k3s node reaches Ready state"
+    echo ""
+}
+
+run_qemu_test() {
+    local qemu_cmd="$1"
+
+    log "Starting QEMU USB boot test..."
+    log "Command: $qemu_cmd"
+
+    echo ""
+    echo "🚀 Launching QEMU..."
+    echo "   Press Ctrl-A then X to exit QEMU"
+    echo ""
+
+    # Execute
+    eval "$qemu_cmd"
+
+    log "QEMU test completed"
+}
+
 echo "🔌 Alpine Linux USB Boot Simulation"
 echo "====================================="
 echo ""
@@ -347,31 +441,21 @@ partition_usb_disk "$USB_DISK"
 # Cleanup on exit
 trap cleanup_loop_device EXIT
 
-# Test interface determination
-log "Determining QEMU USB interface configuration..."
-USB_IF=$(determine_qemu_usb_interface "$USB_INTERFACE")
-log "Selected interface: $USB_IF"
-
-case "$USB_IF" in
-    scsi)
-        log "Using SCSI interface (USB storage typically appears as SCSI)"
-        ;;
-    usb)
-        log "Using USB interface (direct USB emulation)"
-        ;;
-    virtio)
-        log "Using virtio interface (paravirtualized storage)"
-        ;;
-    usb-storage)
-        log "Using explicit USB storage device"
-        ;;
-esac
-
-show_expected_devices "$USB_IF"
-
 # Download Alpine
 ALPINE_ISO=$(download_alpine "$ALPINE_VERSION" "$ARCH" "$VM_DIR")
 
 # Find and prepare apkovl
 APKOVL=$(find_apkovl "$PROJECT_DIR")
 OVERLAY_DIR=$(prepare_overlay "$APKOVL" "$VM_DIR")
+
+# Determine USB interface
+USB_IF=$(determine_qemu_usb_interface "$USB_INTERFACE")
+
+# Show test configuration
+show_test_info "$USB_IF"
+
+# Build QEMU command
+QEMU_CMD=$(build_qemu_command "$ALPINE_ISO" "$USB_DISK" "$USB_IF" "$OVERLAY_DIR")
+
+# Run test
+run_qemu_test "$QEMU_CMD"
