@@ -328,8 +328,21 @@ start() {
 
     rmdir /tmp/usb_check 2>/dev/null || true
 
+    # Create symlinks for compatibility with storage-init service
+    # storage-init expects /dev/mmcblk0 naming, but USB/virtio uses different names
+    _log "Creating compatibility symlinks for storage-init..."
+    if [ ! -e /dev/mmcblk0 ]; then
+        ln -sf "$USB_DEV" /dev/mmcblk0 2>/dev/null || true
+        _log "Created symlink: /dev/mmcblk0 -> $USB_DEV"
+    fi
+    if [ ! -e /dev/mmcblk0p2 ]; then
+        ln -sf "${USB_DEV}2" /dev/mmcblk0p2 2>/dev/null || true
+        _log "Created symlink: /dev/mmcblk0p2 -> ${USB_DEV}2"
+    fi
+
     _log "=== USB DEVICE SETUP COMPLETE ==="
     _log "USB storage ready at $USB_DEV"
+    _log "Compatibility symlinks: /dev/mmcblk0 -> $USB_DEV, /dev/mmcblk0p2 -> ${USB_DEV}2"
 
     eend 0
 }
