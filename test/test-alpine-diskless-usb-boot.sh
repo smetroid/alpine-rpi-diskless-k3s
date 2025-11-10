@@ -342,6 +342,107 @@ EOF
     success "USB device setup service created"
 }
 
+create_dynamic_network_service() {
+    local apkovl_dir="$1"
+
+    log "Creating dynamic network service for QEMU testing..." >&2
+
+    # Modify interfaces file for DHCP
+    cat > "${apkovl_dir}/etc/network/interfaces" << 'EOF'
+auto lo
+iface lo inet loopback
+EOF
+
+    # Disable static networking service
+    rm -f "${apkovl_dir}/etc/runlevels/default/networking"
+
+    # Create dynamic network OpenRC service
+    cat > "${apkovl_dir}/etc/init.d/dynamic-network" << 'EOF'
+#!/sbin/openrc-run
+
+description="Dynamic network interface configuration service"
+name="dynamic network"
+
+depend() {
+    need localmount
+    after localmount
+    before system-bootstrap k3s-bootstrap
+    provide network-config
+}
+
+start() {
+    ebegin "Configuring network interfaces dynamically"
+
+    # Build network interfaces file dynamically
+    cat > /etc/network/interfaces << 'NETEOF'
+auto lo
+iface lo inet loopback
+
+NETEOF
+
+    # Scan for ethernet interfaces and add DHCP config
+    local found_interfaces=0
+    for dev in /sys/class/net/*; do
+        [ -e "$dev" ] || continue
+        INTERFACE=""
+        . "$dev"/uevent 2>/dev/null || continue
+
+        case ${INTERFACE%%[0-9]*} in
+            lo) ;;
+            eth|enp|ens)
+                einfo "Found ethernet interface: $INTERFACE"
+                cat >> /etc/network/interfaces << NETEOF
+auto $INTERFACE
+iface $INTERFACE inet dhcp
+
+NETEOF
+                found_interfaces=$((found_interfaces + 1))
+                ;;
+            *)
+                # Try to configure any other interface as DHCP too
+                einfo "Found other interface: $INTERFACE"
+                cat >> /etc/network/interfaces << NETEOF
+auto $INTERFACE
+iface $INTERFACE inet dhcp
+
+NETEOF
+                found_interfaces=$((found_interfaces + 1))
+                ;;
+        esac
+    done
+
+    if [ $found_interfaces -eq 0 ]; then
+        ewarn "No network interfaces found"
+        eend 1 "No network interfaces detected"
+        return 1
+    fi
+
+    einfo "Network interfaces file configured with $found_interfaces interfaces"
+
+    # Start networking manually
+    einfo "Starting network interfaces"
+    if ifup -a; then
+        eend 0 "Network interfaces brought up successfully"
+    else
+        eend 1 "Some network interfaces failed to start"
+        return 1
+    fi
+}
+
+stop() {
+    ebegin "Stopping dynamic network"
+    ifdown -a 2>/dev/null || true
+    eend 0
+}
+EOF
+
+    chmod +x "${apkovl_dir}/etc/init.d/dynamic-network"
+    mkdir -p "${apkovl_dir}/etc/runlevels/default"
+    ln -sf /etc/init.d/dynamic-network "${apkovl_dir}/etc/runlevels/default/dynamic-network"
+
+    success "Dynamic network service created" >&2
+}
+
 prepare_overlay() {
     local apkovl_path="$1"
     local vm_dir="$2"
@@ -359,6 +460,9 @@ prepare_overlay() {
 
     # Add USB device setup service
     create_usb_device_service "$temp_overlay" >&2
+
+    # Add dynamic network service for QEMU testing
+    create_dynamic_network_service "$temp_overlay"
 
     # Repack overlay
     (cd "$temp_overlay" && tar -czf "$overlay_dir/usb-boot.apkovl.tar.gz" etc usr root var 2>/dev/null) || error "Failed to repack overlay"
