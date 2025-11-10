@@ -314,6 +314,18 @@ start() {
     if [ "$INITIALIZED" = "false" ]; then
         _log "First boot - initializing USB device..."
 
+        # Check if partitions exist, if not create them
+        if [ ! -b "${USB_DEV}2" ]; then
+            _log "Partitions not found - creating partition table on $USB_DEV..."
+            (echo n; echo p; echo 1; echo; echo +256M; echo n; echo p; echo 2; echo; echo; echo t; echo 1; echo c; echo w) | fdisk "$USB_DEV" >/dev/null 2>&1 || true
+            sleep 2
+
+            # Ensure kernel recognizes partitions
+            partprobe "$USB_DEV" 2>/dev/null || true
+            sleep 1
+            _log "Partition table created"
+        fi
+
         # Format data partition
         _log "Formatting ${USB_DEV}2 as ext4..."
         mkfs.ext4 -F "${USB_DEV}2" >/dev/null 2>&1 || true
@@ -588,7 +600,8 @@ log "USB disk image: $USB_DISK"
 
 # Create USB disk if needed
 create_usb_disk "$USB_DISK" 8
-partition_usb_disk "$USB_DISK"
+# Note: Partitioning now happens inside the VM by usb-device-setup service
+# This ensures kernel recognizes partitions and creates device nodes properly
 
 # Cleanup on exit
 trap cleanup_loop_device EXIT
