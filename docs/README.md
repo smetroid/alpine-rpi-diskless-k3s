@@ -309,6 +309,337 @@ Data that survives reboots:
 - System configuration (hostname, network, SSH keys)
 - Application data in persistent volumes
 
+## Boot and Reboot Process
+
+### Understanding Alpine Diskless Mode
+
+Alpine Linux runs entirely from RAM in diskless mode. This means:
+- ✅ **Fast** - Everything runs from memory
+- ✅ **Clean** - Each boot starts fresh
+- ⚠️ **Volatile** - Changes are lost unless saved
+
+**The Challenge:** How do we keep SSH keys, network settings, and k3s data across reboots?
+
+**The Solution:** Combination of persistent storage and LBU (Local Backup Utility)
+
+### First Boot Process
+
+When you first power on a node with a fresh SD card:
+
+```
+1. Hardware Boot
+   └─> Raspberry Pi firmware loads Alpine kernel from SD card boot partition
+
+2. Alpine initramfs (Initial RAM Filesystem)
+   ├─> Creates tmpfs root filesystem in RAM
+   ├─> Searches for *.apkovl.tar.gz on boot media
+   ├─> Extracts k3s-{node}.apkovl.tar.gz to RAM
+   └─> Hands off to OpenRC init system
+
+3. OpenRC Boot Runlevel
+   ├─> localmount (mounts local filesystems)
+   ├─> networking (starts network interfaces)
+   ├─> modules (loads kernel modules)
+   └─> Other boot services
+
+4. OpenRC Default Runlevel (Main Services)
+   ├─> storage-init
+   │   ├─> Auto-detects storage device (/dev/mmcblk0)
+   │   ├─> Creates data partition (/dev/mmcblk0p2) if missing
+   │   ├─> Formats as ext4
+   │   ├─> Mounts to /mnt/data
+   │   ├─> Sets up bind mounts (APK cache, LBU config, /usr/local/bin)
+   │   └─> Creates /mnt/data/.storage-init-complete marker
+   │
+   ├─> lbu-restore
+   │   ├─> Looks for /mnt/data/runtime-{hostname}.apkovl.tar.gz
+   │   ├─> Not found on first boot (skips)
+   │   └─> Continues...
+   │
+   ├─> system-bootstrap
+   │   ├─> Checks for /mnt/data/.system-initialized
+   │   ├─> Not found - performs full initialization:
+   │   ├─> Updates APK repositories
+   │   ├─> Installs required packages (curl, iptables, etc.)
+   │   ├─> Configures timezone
+   │   ├─> Installs and starts SSH server
+   │   ├─> Generates SSH host keys
+   │   ├─> Configures LBU (Local Backup Utility)
+   │   ├─> Creates /etc/lbu/lbu.conf (backup location: /mnt/data)
+   │   ├─> Creates /etc/lbu/include (files to backup)
+   │   ├─> Runs lbu-commit-runtime
+   │   │   └─> Saves to /mnt/data/runtime-{hostname}.apkovl.tar.gz
+   │   └─> Creates /mnt/data/.system-initialized marker
+   │
+   ├─> k3s-bootstrap
+   │   ├─> Waits for storage-init completion
+   │   ├─> Sets up bind mounts (/etc/k3s, /var/lib/rancher/k3s)
+   │   ├─> Installs k3s
+   │   ├─> Starts k3s service
+   │   └─> Creates /mnt/data/.k3s-initialized marker
+   │
+   └─> lbu-persist
+       └─> Registers for shutdown (no action on startup)
+
+5. System Ready
+   └─> k3s cluster node is operational
+```
+
+**First Boot Timeline:**
+- 0:00 - Power on
+- 0:30 - Alpine boots, overlay loads
+- 1:00 - storage-init creates/formats data partition
+- 2:00 - system-bootstrap installs packages (downloading ~50MB)
+- 4:00 - k3s-bootstrap installs k3s (downloading ~60MB)
+- 5:00 - System ready, k3s operational
+
+### Reboot Process (Subsequent Boots)
+
+After you reboot a node (via `reboot` command or power cycle):
+
+```
+1. Alpine initramfs boots (fresh state)
+   ├─> Loads ORIGINAL k3s-{node}.apkovl.tar.gz from SD card
+   └─> System starts in clean state (all runtime changes are GONE)
+
+2. OpenRC Boot Runlevel
+   └─> (same as first boot)
+
+3. OpenRC Default Runlevel
+   ├─> storage-init
+   │   ├─> Finds /dev/mmcblk0p2 already exists
+   │   ├─> Mounts /mnt/data (data persists!)
+   │   ├─> Finds /mnt/data/.storage-init-complete
+   │   └─> Skips partition creation/formatting
+   │
+   ├─> lbu-restore ⭐ KEY SERVICE
+   │   ├─> Finds /mnt/data/runtime-{hostname}.apkovl.tar.gz
+   │   ├─> Extracts overlay to RAM root filesystem
+   │   ├─> RESTORES:
+   │   │   ├─> SSH host keys (same fingerprint!)
+   │   │   ├─> SSH authorized_keys (remote access works!)
+   │   │   ├─> Network configuration
+   │   │   ├─> Hostname, timezone
+   │   │   ├─> /etc/k3s configuration
+   │   │   └─> LBU configuration
+   │   └─> Runtime state restored!
+   │
+   ├─> system-bootstrap
+   │   ├─> Finds /mnt/data/.system-initialized
+   │   ├─> Skips package installation (already done)
+   │   └─> Packages persist because bind mount to /mnt/data/var-cache-apk
+   │
+   ├─> k3s-bootstrap
+   │   ├─> k3s already installed (persisted in /mnt/data)
+   │   ├─> Configuration already mounted from /mnt/data
+   │   └─> Starts k3s service
+   │
+   └─> lbu-persist
+       └─> Registers for shutdown
+
+4. System Ready (much faster!)
+   └─> All runtime changes restored, k3s operational
+```
+
+**Reboot Timeline:**
+- 0:00 - Reboot initiated
+- 0:30 - Alpine boots, overlay loads
+- 0:45 - storage-init mounts existing partition
+- 0:50 - lbu-restore extracts runtime overlay (SSH keys, configs restored!)
+- 1:00 - system-bootstrap skips install (already initialized)
+- 1:30 - k3s-bootstrap starts k3s service
+- 2:00 - System ready (much faster than first boot!)
+
+### Shutdown Process
+
+When you shutdown or reboot:
+
+```
+1. Shutdown/Reboot Command Issued
+   └─> OpenRC begins shutdown sequence
+
+2. Services Stop in Reverse Order
+   ├─> k3s stops
+   ├─> k3s-bootstrap stops
+   ├─> system-bootstrap stops
+   │
+   ├─> lbu-persist stop() ⭐ KEY STEP
+   │   ├─> Runs /usr/local/bin/lbu-commit-runtime
+   │   ├─> Creates overlay package with ALL runtime changes:
+   │   │   ├─> /etc/ssh/* (SSH host keys)
+   │   │   ├─> /root/.ssh/authorized_keys
+   │   │   ├─> /etc/network/interfaces
+   │   │   ├─> /etc/hostname, /etc/hosts, /etc/resolv.conf
+   │   │   ├─> /etc/k3s/* (k3s configuration)
+   │   │   ├─> /etc/timezone, /etc/localtime
+   │   │   └─> Custom services and runlevels
+   │   ├─> Saves to /mnt/data/runtime-{hostname}.apkovl.tar.gz
+   │   └─> Syncs to disk
+   │
+   ├─> lbu-restore stops
+   ├─> storage-init unmounts /mnt/data
+   └─> System halts or reboots
+```
+
+### What Persists vs What Reloads
+
+**Persists on Disk (`/mnt/data/`):**
+- ✅ k3s cluster data (`/var/lib/rancher/k3s/`)
+- ✅ k3s configuration (`/etc/k3s/`)
+- ✅ LBU runtime overlay (`runtime-{hostname}.apkovl.tar.gz`)
+- ✅ APK package cache (`/var/cache/apk/`)
+- ✅ User data in k3s persistent volumes
+- ✅ System initialization markers (`.storage-init-complete`, `.system-initialized`)
+
+**Saved in LBU Runtime Overlay (restored on boot):**
+- ✅ SSH host keys (consistent fingerprint)
+- ✅ SSH authorized_keys (remote access)
+- ✅ Network configuration
+- ✅ Hostname and timezone
+- ✅ Custom services and runlevels
+- ✅ LBU configuration itself
+
+**Reloaded Fresh Each Boot (from original overlay):**
+- 🔄 Base Alpine system
+- 🔄 Original service definitions
+- 🔄 Default apkovl structure
+- 🔄 Build-time configuration
+
+**Lost on Reboot (unless saved to /mnt/data or LBU):**
+- ❌ Log files (unless explicitly persisted)
+- ❌ /tmp directory contents
+- ❌ Runtime processes state
+- ❌ Memory caches
+
+### LBU Backup Mechanism
+
+**How LBU Works:**
+
+1. **Configuration** (`/etc/lbu/lbu.conf`):
+   ```
+   LBU_BACKUPDIR=/mnt/data
+   ```
+
+2. **Include List** (`/etc/lbu/include`):
+   ```
+   etc/hostname
+   etc/hosts
+   etc/resolv.conf
+   etc/network/interfaces
+   etc/ssh
+   etc/k3s
+   root/.ssh/authorized_keys
+   # ... and more
+   ```
+
+3. **Custom Commit Script** (`/usr/local/bin/lbu-commit-runtime`):
+   ```bash
+   #!/bin/sh
+   HOSTNAME=$(hostname)
+   BACKUP_FILE="/mnt/data/runtime-${HOSTNAME}.apkovl.tar.gz"
+   lbu package "$BACKUP_FILE"
+   ```
+
+4. **Automatic Execution:**
+   - First boot: `system-bootstrap` runs `lbu-commit-runtime`
+   - Every shutdown: `lbu-persist stop()` runs `lbu-commit-runtime`
+   - Manual: Run `lbu commit` or `lbu-commit-runtime` anytime
+
+**Manual LBU Operations (on running system):**
+
+```bash
+# See what will be backed up
+lbu status
+
+# See current include list
+lbu list-backup
+
+# Add a file to backups
+lbu include /path/to/file
+
+# Save current state immediately
+lbu commit
+
+# Or use the custom script
+lbu-commit-runtime
+
+# See recent backups
+ls -lh /mnt/data/*.apkovl.tar.gz
+```
+
+### Service Dependencies
+
+The boot order is enforced by OpenRC dependencies:
+
+```
+storage-init (depends: localmount)
+    ↓
+lbu-restore (depends: storage-init)
+    ↓
+system-bootstrap (depends: storage-init)
+    ↓
+k3s-bootstrap (depends: storage-init, after: system-bootstrap)
+    ↓
+k3s (depends: k3s-bootstrap)
+    ↓
+lbu-persist (depends: storage-init, after: system-bootstrap)
+```
+
+**Key Dependency Rules:**
+- `need` - Hard dependency (service must succeed)
+- `after` - Ordering only (run after, but don't require)
+- `before` - Run before another service
+- `provide` - Service provides a virtual dependency
+
+### Testing Boot/Reboot in QEMU
+
+Test the boot process without real hardware:
+
+```bash
+# First boot test (creates partitions, installs everything)
+./test/test-alpine-diskless-boot.sh
+
+# Inside VM, reboot to test restoration
+reboot
+
+# Verify SSH keys persist
+ssh root@localhost -p 2222
+cat /etc/ssh/ssh_host_rsa_key.pub
+# Key should be the same after reboot!
+```
+
+### Troubleshooting Boot Issues
+
+**Check service status:**
+```bash
+rc-status                    # See what's running
+rc-service storage-init status
+rc-service lbu-restore status
+rc-service system-bootstrap status
+```
+
+**Check markers:**
+```bash
+ls -la /mnt/data/.storage-init-complete
+ls -la /mnt/data/.system-initialized
+ls -la /mnt/data/runtime-*.apkovl.tar.gz
+```
+
+**Check LBU configuration:**
+```bash
+cat /etc/lbu/lbu.conf
+cat /etc/lbu/include
+lbu status
+```
+
+**View boot logs:**
+```bash
+dmesg                        # Kernel boot messages
+cat /var/log/messages        # System log (includes OpenRC)
+grep "storage-init" /var/log/messages
+grep "lbu-restore" /var/log/messages
+```
+
 ## File Structure
 
 ```
@@ -455,11 +786,94 @@ nodes:
   - {name: "dev-worker4", ip: "10.0.100.14", role: "worker"}
 ```
 
+## Testing with QEMU
+
+Before deploying to physical Raspberry Pis, test your configuration with QEMU simulation.
+
+### Basic Test
+
+```bash
+# Test Alpine diskless boot process
+./test/test-alpine-diskless-boot.sh
+```
+
+This simulates the exact boot process of a Raspberry Pi:
+1. Alpine kernel loads from ISO
+2. initramfs mounts root as tmpfs (RAM)
+3. Alpine finds and loads .apkovl overlay
+4. OpenRC starts services
+5. Your k3s_bootstrap runs automatically
+
+### Memory Requirements
+
+Alpine diskless runs entirely in RAM. The test script uses **2GB RAM** by default:
+
+| Component | RAM Usage |
+|-----------|-----------|
+| Alpine base | ~100MB |
+| Runtime apkovl extraction | ~200-500MB |
+| Package installation | ~300-500MB |
+| k3s runtime | ~500MB-1GB |
+| **Total recommended** | **2GB minimum** |
+
+### Using Pre-Partitioned Template
+
+For faster iterations, create a reusable partitioned disk template:
+
+**One-time setup:**
+```bash
+# Run first boot (partitions and formats disk)
+./test/test-alpine-diskless-boot.sh
+
+# After boot completes, save template
+cd test/vm-diskless
+cp data.qcow2 data-partitioned-template.qcow2
+```
+
+**Every test run:**
+```bash
+# Clean start
+rm -f test/vm-diskless/data.qcow2
+
+# Run test - automatically uses template
+./test/test-alpine-diskless-boot.sh
+```
+
+Benefits:
+- ✅ No partitioning/formatting on each boot
+- ✅ Mount works immediately
+- ✅ Faster test iterations
+- ✅ Avoids first-boot timing issues
+
+### Test Modes
+
+```bash
+# DHCP mode (default)
+./test/test-alpine-diskless-boot.sh
+
+# Bridge mode (requires host bridge setup)
+NETWORK_MODE=bridge ./test/test-alpine-diskless-boot.sh
+```
+
+### Accessing Test VM
+
+```bash
+# SSH (DHCP mode)
+ssh root@localhost -p 2222
+
+# k3s API
+curl -k https://localhost:6443
+
+# Web services
+curl http://localhost:8080
+```
+
 ## Support
 
 For issues and questions:
-- Check the troubleshooting section above
+- **Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md)** for detailed solutions
 - Validate your YAML configuration first
+- Test with QEMU before deploying to hardware
 - Ensure you're using the correct platform-specific commands
 - Review the generated files in `builds/` directory for debugging
 

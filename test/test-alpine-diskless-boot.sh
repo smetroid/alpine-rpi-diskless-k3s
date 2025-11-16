@@ -32,8 +32,8 @@ echo "  4. 🚀 OpenRC starts services including local.d scripts"
 echo "  5. ⚙️  Your k3s_bootstrap runs automatically via local.d"
 echo ""
 
-# Configuration  
-RAM_SIZE="512M"
+# Configuration
+RAM_SIZE="2048M"  # 2GB RAM for k3s + package installation (Alpine diskless runs in RAM)
 ALPINE_VERSION="3.22.1"
 VM_DIR="$TEST_DIR/vm-diskless"
 mkdir -p "$VM_DIR" 
@@ -61,7 +61,7 @@ depend() {
 }
 
 start() {
-    ebegin "Setting up QEMU device simulation"
+    ebegin "Test Script: Setting up QEMU device simulation"
     apk add e2fsprogs
     
     # Enhanced logger functions
@@ -69,7 +69,7 @@ start() {
     _success() { echo "✅ $*" | logger -t "qemu-device-setup" 2>/dev/null || echo "✅ $*"; }
     _error() { echo "❌ $*" | logger -t "qemu-device-setup" 2>/dev/null || echo "❌ $*"; }
 
-    _log "=== QEMU DETECTION AND DEVICE SETUP ==="
+    _log "=== QEMU TEST DETECTION AND DEVICE SETUP ==="
 
     # Check if we're running in QEMU (look for QEMU-specific devices)
     QEMU_DETECTED=false
@@ -97,13 +97,13 @@ start() {
             mkdir -p /tmp/mnt_check 2>/dev/null || true
 
             # Try to mount data partition to check for initialization marker
-            if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-                if [ -f "/tmp/mnt_check/.system-initialized" ]; then
-                    SYSTEM_INITIALIZED=true
-                    _log "🔄 System reboot detected - initialization marker found"
-                fi
-                umount /tmp/mnt_check 2>/dev/null || true
-            fi
+            #if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
+            #    if [ -f "/tmp/mnt_check/.system-initialized" ]; then
+            #        SYSTEM_INITIALIZED=true
+            #        _log "🔄 System reboot detected - initialization marker found"
+            #    fi
+            #    umount /tmp/mnt_check 2>/dev/null || true
+            #fi
 
             if [ "$SYSTEM_INITIALIZED" = "false" ]; then
                 # First boot - partition the storage device to simulate SD card
@@ -113,18 +113,36 @@ start() {
 
                 # Ensure kernel recognizes partitions
                 partprobe "$STORAGE_DEV" 2>/dev/null || true
-                sleep 1
 
-                # Format the data partition
-                _log "Formatting data partition..."
-                mkfs.ext4 -F "${STORAGE_DEV}2" >/dev/null 2>&1 || true
+                # CRITICAL: Wait for kernel to create partition device nodes
+                # After fdisk+partprobe, devices appear asynchronously
+                _log "Waiting for partition devices to appear..."
+                local timeout=10
+                local count=0
+                while [ $count -lt $timeout ]; do
+                    if [ -b "${STORAGE_DEV}1" ] && [ -b "${STORAGE_DEV}2" ]; then
+                        _success "Partition devices ready: ${STORAGE_DEV}1, ${STORAGE_DEV}2"
+                        break
+                    fi
+                    sleep 1
+                    count=$((count + 1))
+                done
 
-                # Mount and create initialization marker
-                if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-                    echo "$(date): System initialized on first boot" > /tmp/mnt_check/.system-initialized
-                    umount /tmp/mnt_check 2>/dev/null || true
-                    _success "System initialization marker created"
+                if [ $count -ge $timeout ]; then
+                    _error "Timeout waiting for partition devices"
+                    return 1
                 fi
+
+                ## Format the data partition
+                #_log "Formatting data partition..."
+                #mkfs.ext4 -F "${STORAGE_DEV}2" >/dev/null 2>&1 || true
+
+                ## Mount and create initialization marker
+                #if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
+                #    echo "$(date): System initialized on first boot" > /tmp/mnt_check/.system-initialized
+                #    umount /tmp/mnt_check 2>/dev/null || true
+                #    _success "System initialization marker created"
+                #fi
             else
                 _log "🔄 Reboot detected - skipping partitioning, ensuring device nodes exist"
             fi
@@ -196,13 +214,25 @@ if [ ! -f "$ALPINE_ISO" ]; then
 fi
 
 # --- Step 2: Create persistent data disk if missing ---
+DATA_DISK_TEMPLATE="data-partitioned-template.qcow2"
+
+# Check if we have a pre-partitioned template
 if [ ! -f "$DATA_DISK" ]; then
-  log "Creating $DATA_DISK (4G)..."
-  if qemu-img create -f qcow2 "$DATA_DISK" 4G; then
-    log "Successfully created data disk"
+  if [ -f "$DATA_DISK_TEMPLATE" ]; then
+    log "Using pre-partitioned template: $DATA_DISK_TEMPLATE"
+    cp "$DATA_DISK_TEMPLATE" "$DATA_DISK"
+    log "Copied template to $DATA_DISK"
   else
-    log "ERROR: Failed to create data disk"
-    exit 1
+    log "Creating $DATA_DISK (4G)..."
+    if qemu-img create -f qcow2 "$DATA_DISK" 4G; then
+      log "Successfully created data disk"
+      log "NOTE: First boot will partition this disk"
+      log "After successful first boot, save as template:"
+      log "  cp $DATA_DISK $DATA_DISK_TEMPLATE"
+    else
+      log "ERROR: Failed to create data disk"
+      exit 1
+    fi
   fi
 fi
 
@@ -334,17 +364,18 @@ ls -la etc/network/ || log "etc/network directory not found"
 ls -la root/.ssh/authorized_keys 2>/dev/null || log "authorized_keys not found"
 
 # Repack overlay (include root directory!)
-tar -czf "$OVERLAY_DIR/k3s-21.apkovl.tar.gz" etc usr root var 2>/dev/null
+# Use k3s-21-test to match the hostname set above
+tar -czf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" etc usr root var 2>/dev/null
 cd "$VM_DIR"
 
 # Debug: Check overlay contents
 log "Checking overlay contents:"
-tar -tzf "$OVERLAY_DIR/k3s-21.apkovl.tar.gz" | grep interfaces || log "No interfaces file in overlay"
-tar -tzf "$OVERLAY_DIR/k3s-21.apkovl.tar.gz" | grep authorized_keys || log "No authorized_keys in overlay"
+tar -tzf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" | grep interfaces || log "No interfaces file in overlay"
+tar -tzf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" | grep authorized_keys || log "No authorized_keys in overlay"
 
 rm -rf "$TEMP_OVERLAY"
 
-if [ -f "$OVERLAY_DIR/k3s-21.apkovl.tar.gz" ]; then
+if [ -f "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" ]; then
     log "Successfully prepared overlay for $NETWORK_MODE mode"
 else
     log "ERROR: Failed to prepare overlay"
@@ -371,9 +402,10 @@ if [ "$NETWORK_MODE" = "dhcp" ]; then
       -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=1.1.1.1 \
       -device virtio-net-pci,netdev=net0 \
       -drive file="$DATA_DISK",format=qcow2 \
-      -drive file=fat:rw:"$OVERLAY_DIR",format=raw 
-      #-nographic
-      #-serial mon:stdio
+      -drive file=fat:rw:"$OVERLAY_DIR",format=raw \
+      #-nographic 
+      #-serial mon:stdio \
+      #-serial file:/tmp/qemu-serial.log \
       #-netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=8.8.8.8 \
       #-device virtio-net-pci,netdev=net0 \
       #-netdev user,id=net0,dns=8.8.8.8 \
@@ -420,3 +452,9 @@ fi
 
 echo ""
 echo "🔄 Alpine diskless boot simulation completed."
+# Note: Alpine diskless architecture memory usage breakdown:
+# - Alpine base system: ~100MB
+# - Runtime apkovl extraction (full snapshot): ~200-500MB  
+# - Package installation (system-bootstrap): ~300-500MB
+# - k3s runtime: ~500MB-1GB
+# Total recommended: 2GB minimum for comfortable operation

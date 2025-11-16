@@ -59,53 +59,130 @@ if [ -f "$SCRIPT_DIR/setup-persistence.sh" ]; then
         fi
         
         # Add Alpine configuration backup script
-        cat > "${NODE_NAME}-apkovl/etc/local.d/80-backup-config.start" << 'EOF'
-#!/bin/sh
+        # Create OpenRC service for backing up configuration
+        cat > "${NODE_NAME}-apkovl/etc/init.d/config-backup" << 'EOF'
+#!/sbin/openrc-run
 
-# Create persistent backup of Alpine configuration
-echo "Backing up Alpine configuration..."
+description="Backup Alpine configuration to persistent storage"
+name="config backup"
 
-# Wait for storage to be mounted
-sleep 10
+depend() {
+    need storage-init system-bootstrap
+    after storage-init system-bootstrap
+    provide config-backup
+}
 
-# Backup important system files
-mkdir -p /mnt/data/alpine-backup/{etc,root}
-
-# System configuration
-cp -f /etc/hostname /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-cp -f /etc/resolv.conf /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-cp -rf /etc/network /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-cp -rf /etc/ssh /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-
-# Root user files
-cp -rf /root/.ssh /mnt/data/alpine-backup/root/ 2>/dev/null || true
-
-# K3s configuration
-cp -rf /etc/k3s /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-
-sync
-EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/local.d/80-backup-config.start"
-        
-        # Add other persistence scripts...
-        cat > "${NODE_NAME}-apkovl/etc/local.d/20-restore-config.start" << 'EOF'
-#!/bin/sh
-
-# Restore Alpine configuration from persistent storage
-echo "Restoring Alpine configuration..."
-
-if [ -d /mnt/data/alpine-backup ]; then
-    # Restore system configuration
-    cp -rf /mnt/data/alpine-backup/etc/* /etc/ 2>/dev/null || true
-    cp -rf /mnt/data/alpine-backup/root/* /root/ 2>/dev/null || true
+start() {
+    ebegin "Backing up Alpine configuration to persistent storage"
     
-    # Set proper permissions
-    chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
-    chmod 700 /root/.ssh 2>/dev/null || true
-    chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
-fi
+    # Wait for storage to be ready
+    if [ ! -d /mnt/data ]; then
+        eerror "Persistent storage not available at /mnt/data"
+        eend 1 "Storage not mounted"
+        return 1
+    fi
+    
+    # Create backup directories
+    mkdir -p /mnt/data/alpine-backup/{etc,root}
+    
+    # System configuration
+    einfo "Backing up system configuration..."
+    cp -f /etc/hostname /mnt/data/alpine-backup/etc/ 2>/dev/null || true
+    cp -f /etc/resolv.conf /mnt/data/alpine-backup/etc/ 2>/dev/null || true
+    cp -rf /etc/network /mnt/data/alpine-backup/etc/ 2>/dev/null || true
+    cp -rf /etc/ssh /mnt/data/alpine-backup/etc/ 2>/dev/null || true
+    
+    # Root user files - CRITICAL for SSH access
+    einfo "Backing up SSH configuration..."
+    if [ -d /root/.ssh ]; then
+        cp -rf /root/.ssh /mnt/data/alpine-backup/root/ 2>/dev/null || true
+        # Verify the backup was successful
+        if [ -f /mnt/data/alpine-backup/root/.ssh/authorized_keys ]; then
+            einfo "SSH authorized_keys backed up successfully"
+        else
+            ewarn "SSH authorized_keys backup may have failed"
+        fi
+    else
+        ewarn "No /root/.ssh directory found to backup"
+    fi
+    
+    # K3s configuration
+    if [ -d /etc/k3s ]; then
+        einfo "Backing up k3s configuration..."
+        cp -rf /etc/k3s /mnt/data/alpine-backup/etc/ 2>/dev/null || true
+    fi
+    
+    # Ensure backup timestamp
+    echo "$(date): Configuration backup completed" > /mnt/data/alpine-backup/.backup-timestamp
+    
+    sync
+    eend 0 "Configuration backup completed"
+}
+
+stop() {
+    ebegin "Stopping config backup service"
+    eend 0
+}
 EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/local.d/20-restore-config.start"
+        chmod +x "${NODE_NAME}-apkovl/etc/init.d/config-backup"
+        
+        
+        # Create OpenRC service for restoring configuration
+        cat > "${NODE_NAME}-apkovl/etc/init.d/config-restore" << 'EOF'
+#!/sbin/openrc-run
+
+description="Restore Alpine configuration from persistent storage"
+name="config restore"
+
+depend() {
+    need storage-init
+    after storage-init
+    before system-bootstrap
+    provide config-restore
+}
+
+start() {
+    ebegin "Restoring Alpine configuration from persistent storage"
+    
+    # Wait for storage to be ready
+    if [ ! -d /mnt/data ]; then
+        eerror "Persistent storage not available at /mnt/data"
+        eend 1 "Storage not mounted"
+        return 1
+    fi
+    
+    if [ -d /mnt/data/alpine-backup ]; then
+        einfo "Found configuration backup, restoring..."
+        
+        # Restore system configuration
+        cp -rf /mnt/data/alpine-backup/etc/* /etc/ 2>/dev/null || true
+        cp -rf /mnt/data/alpine-backup/root/* /root/ 2>/dev/null || true
+        
+        # Set proper permissions for SSH
+        if [ -f /root/.ssh/authorized_keys ]; then
+            chmod 700 /root/.ssh 2>/dev/null || true
+            chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+            chown root:root /root/.ssh/authorized_keys 2>/dev/null || true
+            einfo "SSH authorized_keys restored and permissions set"
+        fi
+        
+        # Set SSH host key permissions
+        chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
+        
+        eend 0 "Configuration restored successfully"
+    else
+        einfo "No configuration backup found, using overlay defaults"
+        eend 0 "Using default configuration"
+    fi
+}
+
+stop() {
+    ebegin "Stopping config restore service"
+    eend 0
+}
+EOF
+        chmod +x "${NODE_NAME}-apkovl/etc/init.d/config-restore"
+        
         
         # Create additional system configuration files
         cat > "${NODE_NAME}-apkovl/etc/modules" << 'EOF'
@@ -162,8 +239,8 @@ command="/usr/local/bin/system_bootstrap"
 command_background=false
 
 depend() {
-    need localmount
-    after localmount
+    need localmount storage-init
+    after localmount storage-init
     before k3s-bootstrap
     provide system-bootstrap
 }
@@ -322,8 +399,87 @@ rc-update add savecache shutdown
 # Configure LBU (Local Backup Utility)
 cat > /etc/lbu/lbu.conf << 'LBU_CONF_EOF'
 LBU_BACKUPDIR=/mnt/data
-BACKUP_PREFIX=runtime
 LBU_CONF_EOF
+
+# Create a wrapper script for lbu commit with custom naming
+cat > /usr/local/bin/lbu-commit-runtime << 'LBU_SCRIPT_EOF'
+#!/bin/sh
+# Custom LBU commit script that creates full system snapshot
+# This preserves ALL runtime changes, not just /etc
+
+HOSTNAME=$(hostname)
+BACKUP_FILE="/mnt/data/runtime-${HOSTNAME}.apkovl.tar.gz"
+TEMP_DIR="/tmp/runtime-snapshot"
+
+# Ensure /mnt/data is writable
+if [ ! -w "/mnt/data" ]; then
+    echo "ERROR: /mnt/data is not writable, attempting remount..."
+    mount -o remount,rw /mnt/data 2>/dev/null || {
+        echo "ERROR: Failed to remount /mnt/data as read-write"
+        exit 1
+    }
+fi
+
+echo "Creating full system snapshot for runtime preservation..."
+
+# Clean up any previous temp directory
+rm -rf "$TEMP_DIR"
+mkdir -p "$TEMP_DIR"
+
+# Copy all critical directories that contain runtime changes
+# /etc - all configuration files
+if [ -d /etc ]; then
+    echo "  📋 Capturing /etc (configurations)..."
+    cp -a /etc "$TEMP_DIR/" 2>/dev/null || true
+fi
+
+# /usr/local - custom scripts and binaries
+if [ -d /usr/local ]; then
+    echo "  🔧 Capturing /usr/local (custom scripts)..."
+    mkdir -p "$TEMP_DIR/usr"
+    cp -a /usr/local "$TEMP_DIR/usr/" 2>/dev/null || true
+fi
+
+# /root - SSH keys and root user files
+if [ -d /root ]; then
+    echo "  🔑 Capturing /root (SSH keys, configs)..."
+    cp -a /root "$TEMP_DIR/" 2>/dev/null || true
+fi
+
+# /var - selective capture (lib, but not cache/log/tmp)
+echo "  💾 Capturing /var (selective: lib only, skipping cache/log/tmp)..."
+mkdir -p "$TEMP_DIR/var"
+if [ -d /var/lib ]; then
+    cp -a /var/lib "$TEMP_DIR/var/" 2>/dev/null || true
+fi
+
+# Create the runtime snapshot tarball
+cd "$TEMP_DIR"
+if tar -czf "$BACKUP_FILE" . 2>/dev/null; then
+    echo "✅ Runtime overlay saved as: $BACKUP_FILE"
+    # Verify the archive
+    if tar -tzf "$BACKUP_FILE" >/dev/null 2>&1; then
+        ARCHIVE_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+        FILE_COUNT=$(tar -tzf "$BACKUP_FILE" | wc -l)
+        echo "   Archive size: $ARCHIVE_SIZE ($FILE_COUNT files)"
+        sync
+    else
+        echo "⚠️  Warning: Archive verification failed"
+    fi
+else
+    echo "❌ ERROR: Failed to create runtime overlay"
+    cd /
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+# Cleanup
+cd /
+rm -rf "$TEMP_DIR"
+
+echo "Runtime snapshot complete"
+LBU_SCRIPT_EOF
+chmod +x /usr/local/bin/lbu-commit-runtime
 
 # Configure what files LBU should include in backups
 cat > /etc/lbu/include << 'LBU_EOF'
@@ -331,14 +487,50 @@ etc/hostname
 etc/hosts
 etc/resolv.conf
 etc/network/interfaces
-etc/ssh/ssh_host_*
+etc/ssh
 etc/apk/repositories
 etc/modules
 etc/sysctl.d/*
 etc/timezone
 etc/localtime
+etc/k3s
+etc/lbu/lbu.conf
+etc/init.d/qemu-device-setup
+etc/runlevels/default/qemu-device-setup
+etc/init.d/usb-device-setup
+etc/runlevels/default/usb-device-setup
+etc/init.d/dynamic-network
+etc/runlevels/default/dynamic-network
+etc/init.d/lbu-restore
+etc/runlevels/default/lbu-restore
+etc/init.d/lbu-persist
+etc/runlevels/default/lbu-persist
 root/.ssh/authorized_keys
 LBU_EOF
+
+# Ensure SSH authorized_keys is persistent and included in LBU
+if [ -f /root/.ssh/authorized_keys ]; then
+    # Make sure the file is writable so LBU can include it
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    # Copy the file to ensure it's in a writable location
+    cp -a /root/.ssh/authorized_keys /root/.ssh/authorized_keys.tmp
+    mv /root/.ssh/authorized_keys.tmp /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    chown root:root /root/.ssh/authorized_keys
+    _logger "SSH authorized_keys made persistent for LBU backup"
+    
+    # CRITICAL: Also immediately save to the alpine-backup location
+    # This ensures SSH keys survive even if LBU backup has issues
+    if [ -d /mnt/data ]; then
+        mkdir -p /mnt/data/alpine-backup/root/.ssh
+        cp -a /root/.ssh/authorized_keys /mnt/data/alpine-backup/root/.ssh/
+        chmod 600 /mnt/data/alpine-backup/root/.ssh/authorized_keys
+        chown root:root /mnt/data/alpine-backup/root/.ssh/authorized_keys
+        _logger "SSH authorized_keys also saved to alpine-backup as failsafe"
+        sync
+    fi
+fi
 
 # Mark system initialization as complete (both RAM and persistent storage)
 touch /usr/local/bin/.system-initialized
@@ -347,8 +539,8 @@ touch /mnt/data/.system-initialized
 _logger "System initialization complete"
 echo "✅ System: Packages and timezone configured" > /dev/console
 
-# Commit the overlay to save installed packages
-lbu commit
+# Commit the overlay to save installed packages with runtime prefix
+lbu-commit-runtime
 
 exit 0
 SCRIPT_EOF
@@ -432,11 +624,20 @@ stop() {
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
     
-    # Add service to default runlevel  
+    # Set up proper service dependencies and runlevels
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
+    mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/boot"
+    
+    # config-restore runs early in boot runlevel (before most services)
+    ln -sf /etc/init.d/config-restore "${NODE_NAME}-apkovl/etc/runlevels/boot/config-restore"
+    
+    # system-bootstrap runs in default runlevel (after config-restore)
     ln -sf /etc/init.d/system-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/system-bootstrap"
     
-    # Enable k3s-bootstrap service to run after system-bootstrap
+    # config-backup runs after system-bootstrap to backup any changes
+    ln -sf /etc/init.d/config-backup "${NODE_NAME}-apkovl/etc/runlevels/default/config-backup"
+    
+    # k3s-bootstrap runs after config-backup
     ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
     # No longer need 99-start-services.start since we use proper OpenRC dependencies

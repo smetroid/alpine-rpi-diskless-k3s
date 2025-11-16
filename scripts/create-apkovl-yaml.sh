@@ -143,16 +143,15 @@ EOF
         chmod 600 "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
     fi
 
-    # Create fstab for persistent mounts (use storage device from config)
-    STORAGE_DEVICE=$(yaml_get "storage.device" 2>/dev/null || echo "/dev/mmcblk0")
-    DATA_MOUNT=$(yaml_get "storage.data_mount" 2>/dev/null || echo "/mnt/data")
-    
+    # Create minimal fstab (storage-init handles all dynamic mounting)
+    # No need for device entries since storage-init auto-detects and mounts
+    # both SD cards (/dev/mmcblk0) and USB devices (/dev/sda, /dev/vda)
     cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
-# NOTE: Using noauto to prevent mount failures during initial boot
-# Devices are created by 00-test-execution.start script during local.d execution
-# k3s_bootstrap will manually mount these as needed
-${STORAGE_DEVICE}p1 /media/mmcblk0p1 vfat defaults,noauto 0 0
-${STORAGE_DEVICE}p2 $DATA_MOUNT ext4 defaults,noauto 0 0
+# Alpine diskless k3s cluster - Dynamic storage mounting
+# Storage devices are auto-detected and mounted by the storage-init service
+# This supports SD cards (/dev/mmcblk0), USB devices (/dev/sda), and virtio (/dev/vda)
+#
+# No static device entries needed - everything is handled dynamically at boot
 EOF
 
     # Create comprehensive Alpine initialization script
@@ -433,9 +432,8 @@ EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
     
     # Create storage-init OpenRC service
-    STORAGE_DEVICE=$(yaml_get "storage.device")
     DATA_MOUNT=$(yaml_get "storage.data_mount")
-    cat > "${NODE_NAME}-apkovl/etc/init.d/storage-init" << EOF
+    cat > "${NODE_NAME}-apkovl/etc/init.d/storage-init" << 'EOF'
 #!/sbin/openrc-run
 
 description="Storage initialization and persistent storage service"
@@ -454,29 +452,51 @@ start_pre() {
         einfo "Storage initialization already completed - skipping"
         return 1
     fi
-    
+
     ebegin "Preparing storage initialization"
     return 0
 }
 
 start() {
     ebegin "Setting up persistent storage"
-    
-    # Check for storage device
-    einfo "Checking for storage device $STORAGE_DEVICE..."
-    if [ ! -b "$STORAGE_DEVICE" ]; then
-        eerror "Storage device $STORAGE_DEVICE not found"
+
+    # Auto-detect storage device - supports SD card, USB, and virtio
+    einfo "Auto-detecting storage device..."
+    STORAGE_DEVICE=""
+    DATA_PARTITION=""
+
+    # Check for SD card device (Raspberry Pi SD card)
+    if [ -b "/dev/mmcblk0" ]; then
+        STORAGE_DEVICE="/dev/mmcblk0"
+        DATA_PARTITION="/dev/mmcblk0p2"
+        einfo "Detected SD card device: $STORAGE_DEVICE"
+    # Check for SCSI/USB storage (first device)
+    elif [ -b "/dev/sda" ]; then
+        STORAGE_DEVICE="/dev/sda"
+        DATA_PARTITION="/dev/sda2"
+        einfo "Detected SCSI/USB device: $STORAGE_DEVICE"
+    # Check for virtio storage
+    elif [ -b "/dev/vda" ]; then
+        STORAGE_DEVICE="/dev/vda"
+        DATA_PARTITION="/dev/vda2"
+        einfo "Detected virtio device: $STORAGE_DEVICE"
+    # Check for second SCSI/USB device
+    elif [ -b "/dev/sdb" ]; then
+        STORAGE_DEVICE="/dev/sdb"
+        DATA_PARTITION="/dev/sdb2"
+        einfo "Detected SCSI/USB device: $STORAGE_DEVICE"
+    else
+        eerror "No storage device found"
         einfo "Available devices:"
-        ls -la /dev/mmc* /dev/sd* 2>/dev/null || einfo "No storage devices found"
+        ls -la /dev/mmc* /dev/sd* /dev/vd* 2>/dev/null || einfo "No storage devices found"
         eend 1 "Storage device not found"
         return 1
     fi
-    einfo "Storage device found"
-    
-    # Verify data partition exists (should be created by setup-sd-card.sh)
-    einfo "Verifying data partition..."
-    if [ ! -b "${STORAGE_DEVICE}p2" ]; then
-        eerror "Data partition ${STORAGE_DEVICE}p2 not found"
+
+    # Verify data partition exists
+    einfo "Verifying data partition $DATA_PARTITION..."
+    if [ ! -b "$DATA_PARTITION" ]; then
+        eerror "Data partition $DATA_PARTITION not found"
         einfo "Run setup-sd-card.sh first to create the partition layout"
         einfo "Available partitions:"
         ls -la ${STORAGE_DEVICE}* 2>/dev/null || einfo "No partitions found"
@@ -484,78 +504,267 @@ start() {
         return 1
     fi
     einfo "Data partition verified"
-    
+
     # Format if needed
-    if [ -b "${STORAGE_DEVICE}p2" ] && ! blkid ${STORAGE_DEVICE}p2 | grep -q ext4; then
+    if [ -b "$DATA_PARTITION" ] && ! blkid $DATA_PARTITION | grep -q ext4; then
         einfo "Formatting data partition..."
-        if mkfs.ext4 -F -L DATA ${STORAGE_DEVICE}p2; then
+        if mkfs.ext4 -F -L DATA $DATA_PARTITION; then
             einfo "Data partition formatted successfully"
+
+            # CRITICAL: Aggressive sync - wait for kernel to recognize filesystem
+            # After mkfs, the kernel needs time to update metadata before mounting
+            einfo "Syncing filesystem buffers (this may take a few seconds)..."
+
+            # Step 1: Flush all kernel buffers to disk
+            sync
+            blockdev --flushbufs $DATA_PARTITION 2>/dev/null || true
+
+            # Step 2: Wait for I/O to complete
+            sleep 3
+
+            # Step 3: Force kernel to re-read device metadata
+            blockdev --rereadpt $STORAGE_DEVICE 2>/dev/null || true
+            partprobe $DATA_PARTITION 2>/dev/null || true
+
+            # Step 4: Trigger udev to recognize filesystem (if available)
+            if command -v udevadm >/dev/null 2>&1; then
+                einfo "Triggering udev device recognition..."
+                udevadm trigger --subsystem-match=block >/dev/null 2>&1 || true
+                udevadm settle --timeout=5 2>/dev/null || true
+            fi
+
+            # Step 5: Final sync and wait
+            sync
+            sleep 2
+
+            # Step 6: Verify filesystem is recognized
+            if blkid $DATA_PARTITION | grep -q ext4; then
+                einfo "Filesystem verified and ready for mounting"
+            else
+                ewarn "Filesystem created but not yet recognized by kernel"
+                ewarn "Mount may fail - this is expected on first boot"
+            fi
         else
             eend 1 "Failed to format data partition"
             return 1
         fi
     fi
-    
-    # Mount data partition
-    einfo "Mounting persistent storage..."
-    mkdir -p $DATA_MOUNT
-    if mount ${STORAGE_DEVICE}p2 $DATA_MOUNT; then
-        einfo "Storage mounted at $DATA_MOUNT"
-    else
-        eend 1 "Failed to mount storage"
-        return 1
+
+    # Check if Alpine already mounted the data partition (common during boot)
+    # Alpine mounts partitions to /media/<partition-name>
+    # Extract just the partition name from the full path (e.g., /dev/sda2 -> sda2)
+    PARTITION_NAME=$(basename "$DATA_PARTITION")
+    ALPINE_MOUNT_POINT=""
+
+    if mountpoint -q "/media/$PARTITION_NAME" 2>/dev/null; then
+        ALPINE_MOUNT_POINT="/media/$PARTITION_NAME"
+        einfo "Data partition already mounted by Alpine at /media/$PARTITION_NAME"
     fi
-    
+
+    # Mount data partition
+    mkdir -p /mnt/data
+    if [ -n "$ALPINE_MOUNT_POINT" ]; then
+        # Alpine already mounted it - create bind mount to /mnt/data
+        einfo "Creating bind mount from $ALPINE_MOUNT_POINT to /mnt/data..."
+        if mount --bind "$ALPINE_MOUNT_POINT" /mnt/data; then
+            einfo "Storage bind-mounted at /mnt/data (source: $ALPINE_MOUNT_POINT)"
+        else
+            eend 1 "Failed to bind mount storage"
+            return 1
+        fi
+    else
+        # Alpine hasn't mounted it yet - mount directly to /mnt/data
+        einfo "Mounting persistent storage directly to /mnt/data..."
+
+        # Try mounting with retry logic (filesystem may not be immediately recognized)
+        local mount_attempts=3
+        local mount_success=false
+        local attempt=1
+
+        while [ $attempt -le $mount_attempts ]; do
+            if [ $attempt -gt 1 ]; then
+                einfo "Mount attempt $attempt of $mount_attempts..."
+                # Between retries, force another sync
+                sync
+                sleep 2
+            fi
+
+            if mount $DATA_PARTITION /mnt/data 2>/dev/null; then
+                einfo "Storage mounted at /mnt/data (attempt $attempt)"
+                mount_success=true
+                break
+            else
+                if [ $attempt -lt $mount_attempts ]; then
+                    ewarn "Mount attempt $attempt failed, retrying..."
+                fi
+            fi
+
+            attempt=$((attempt + 1))
+        done
+
+        if [ "$mount_success" = "false" ]; then
+            eerror "Failed to mount storage after $mount_attempts attempts"
+            eerror "This can happen on first boot - filesystem needs kernel recognition"
+            einfo "Possible solutions:"
+            einfo "  1. Reboot - filesystem will mount successfully"
+            einfo "  2. Wait a few seconds and run: rc-service storage-init restart"
+            eend 1 "Failed to mount storage"
+            return 1
+        fi
+    fi
+
+    # CRITICAL: Check if mount is read-only and fix if needed
+    if ! touch /mnt/data/.write-test 2>/dev/null; then
+        ewarn "Storage mounted as read-only, attempting to remount as read-write..."
+
+        # First, try to investigate WHY it's read-only
+        einfo "Checking filesystem for errors..."
+        e2fsck -p $DATA_PARTITION 2>&1 | head -5 || true
+
+        # Attempt remount as read-write
+        # If using Alpine's mount, we need to remount the source partition
+        if [ -n "$ALPINE_MOUNT_POINT" ]; then
+            einfo "Remounting source partition $ALPINE_MOUNT_POINT as read-write..."
+            if mount -o remount,rw "$ALPINE_MOUNT_POINT"; then
+                einfo "Successfully remounted $ALPINE_MOUNT_POINT as read-write"
+            else
+                eerror "Failed to remount $ALPINE_MOUNT_POINT as read-write"
+                eend 1 "Cannot fix read-only filesystem"
+                return 1
+            fi
+        else
+            # Direct mount - remount /mnt/data
+            if mount -o remount,rw /mnt/data; then
+                einfo "Successfully remounted /mnt/data as read-write"
+            else
+                eerror "Failed to remount /mnt/data as read-write"
+                eend 1 "Cannot fix read-only filesystem"
+                return 1
+            fi
+        fi
+
+        # Verify write capability
+        if touch /mnt/data/.write-test 2>/dev/null; then
+            rm -f /mnt/data/.write-test
+            einfo "Write test successful"
+        else
+            eerror "Still cannot write to /mnt/data after remount"
+            eend 1 "Filesystem remains read-only"
+            return 1
+        fi
+    else
+        rm -f /mnt/data/.write-test
+        einfo "Storage is writable"
+    fi
+
     # Create directories for k3s, APK cache, LBU config, and usr/local/bin
-    mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/etc-persistent $DATA_MOUNT/var-lib-k3s $DATA_MOUNT/var-cache-apk $DATA_MOUNT/etc-lbu $DATA_MOUNT/usr-local-bin
-    
+    mkdir -p /mnt/data/k3s /mnt/data/etc-persistent /mnt/data/var-lib-k3s /mnt/data/var-cache-apk /mnt/data/etc-lbu /mnt/data/usr-local-bin
+
     # Set up APK cache bind mount to persistent storage
     if ! mountpoint -q /var/cache/apk 2>/dev/null; then
         einfo "Setting up APK cache on persistent storage"
-        mount --bind $DATA_MOUNT/var-cache-apk /var/cache/apk
-        eend \$? "APK cache mount"
+        mount --bind /mnt/data/var-cache-apk /var/cache/apk
+        eend $? "APK cache mount"
     fi
-    
+
     # Set up LBU config bind mount to persistent storage
     if ! mountpoint -q /etc/lbu 2>/dev/null; then
         einfo "Setting up LBU config on persistent storage"
         # Copy overlay LBU config to persistent storage if it doesn't exist
-        if [ -d /etc/lbu ] && [ ! -f $DATA_MOUNT/etc-lbu/lbu.conf ]; then
-            cp -a /etc/lbu/* $DATA_MOUNT/etc-lbu/ 2>/dev/null || true
+        if [ -d /etc/lbu ] && [ ! -f /mnt/data/etc-lbu/lbu.conf ]; then
+            cp -a /etc/lbu/* /mnt/data/etc-lbu/ 2>/dev/null || true
         fi
-        mount --bind $DATA_MOUNT/etc-lbu /etc/lbu
-        eend \$? "LBU config mount"
+        mount --bind /mnt/data/etc-lbu /etc/lbu
+        eend $? "LBU config mount"
     fi
-    
+
     # Set up /usr/local/bin bind mount to persistent storage
     if ! mountpoint -q /usr/local/bin 2>/dev/null; then
         einfo "Setting up /usr/local/bin on persistent storage"
         # Copy overlay files from /usr/local/bin to persistent storage if they don't exist
         if [ -d /usr/local/bin ]; then
             for file in /usr/local/bin/*; do
-                if [ -f "\$file" ] && [ ! -f "$DATA_MOUNT/usr-local-bin/\$(basename "\$file")" ]; then
-                    cp -a "\$file" $DATA_MOUNT/usr-local-bin/
+                if [ -f "$file" ] && [ ! -f "/mnt/data/usr-local-bin/$(basename "$file")" ]; then
+                    cp -a "$file" /mnt/data/usr-local-bin/
                 fi
             done
         fi
-        mount --bind $DATA_MOUNT/usr-local-bin /usr/local/bin
-        eend \$? "/usr/local/bin mount"
+        mount --bind /mnt/data/usr-local-bin /usr/local/bin
+        eend $? "/usr/local/bin mount"
     fi
-    
+
     # Mark storage initialization as complete
-    echo "\$(date): Storage initialization completed successfully" > $DATA_MOUNT/.storage-init-complete
-    
+    echo "$(date): Storage initialization completed successfully" > /mnt/data/.storage-init-complete
+
     eend 0 "Persistent storage setup complete"
 }
 
 stop() {
     ebegin "Unmounting persistent storage"
-    umount $DATA_MOUNT 2>/dev/null || true
+    umount /mnt/data 2>/dev/null || true
     eend 0
 }
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/storage-init"
-    
+
+    # NOTE: lbu-restore service removed - Alpine's init automatically loads
+    # any .apkovl.tar.gz files it finds on mounted partitions during boot.
+    # Our lbu-persist service creates runtime-*.apkovl.tar.gz on /mnt/data,
+    # which Alpine's init automatically discovers and loads on next boot.
+    # No need for a separate restore service - Alpine handles it natively!
+
+    # Create lbu-persist OpenRC service (commits changes on shutdown)
+    cat > "${NODE_NAME}-apkovl/etc/init.d/lbu-persist" << 'EOF'
+#!/sbin/openrc-run
+
+description="Commit LBU changes on shutdown/reboot"
+name="lbu persist"
+
+depend() {
+    need storage-init
+    after storage-init system-bootstrap
+    provide lbu-persist
+}
+
+start() {
+    # Nothing to do on start - system-bootstrap handles initial LBU setup
+    ebegin "LBU persistence service started"
+    eend 0
+}
+
+stop() {
+    ebegin "Committing LBU changes before shutdown"
+
+    # Save any runtime changes made during this session
+    if [ -d /mnt/data ] && mountpoint -q /mnt/data; then
+        # Use the custom lbu-commit-runtime created by system-bootstrap
+        if [ -x /usr/local/bin/lbu-commit-runtime ]; then
+            /usr/local/bin/lbu-commit-runtime
+            if [ $? -eq 0 ]; then
+                einfo "Runtime changes committed"
+            else
+                ewarn "LBU commit failed"
+            fi
+        else
+            # Fallback to standard lbu commit
+            if lbu commit -d 2>/dev/null; then
+                einfo "Changes saved to persistent storage"
+            else
+                ewarn "LBU commit failed"
+            fi
+        fi
+    else
+        ewarn "Persistent storage not available, changes will be lost"
+    fi
+
+    eend 0
+}
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/lbu-persist"
+
+    # Enable lbu-persist service (lbu-restore not needed - Alpine auto-loads apkovl)
+    ln -sf /etc/init.d/lbu-persist "${NODE_NAME}-apkovl/etc/runlevels/default/lbu-persist"
+
     # Create simple console notification (no longer needed with proper OpenRC service)
     # The k3s-bootstrap service handles all console output
     
