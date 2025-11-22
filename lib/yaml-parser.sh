@@ -127,8 +127,15 @@ yaml_get_array() {
     # Array items
     in_array && /^[[:space:]]*-/ {
         gsub(/^[[:space:]]*-[[:space:]]*/, "")
-        gsub(/^"/, "")
-        gsub(/"$/, "")
+        # Handle quoted values with potential inline comments
+        if (match($0, /^"[^"]*"/)) {
+            # Extract just the content between quotes
+            $0 = substr($0, 2, RLENGTH - 2)
+        } else {
+            # Unquoted value - strip inline comments
+            gsub(/#.*$/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+        }
         if (length($0) > 0) print $0
     }
     
@@ -156,11 +163,14 @@ yaml_get_nodes() {
     /^[[:space:]]*$/ { next }
     
     /^nodes:/ { in_nodes = 1; next }
-    /^[a-zA-Z_][a-zA-Z0-9_]*:/ { 
+    /^[a-zA-Z_][a-zA-Z0-9_]*:/ {
         if (in_nodes) {
             # Output current node before exiting nodes section
             if (current_node != "") {
                 print current_node ":" current_ip ":" current_role
+                current_node = ""
+                current_ip = ""
+                current_role = ""
             }
             in_nodes = 0
         }

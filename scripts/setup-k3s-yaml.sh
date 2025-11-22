@@ -88,7 +88,7 @@ command_user="root"
 start_stop_daemon_args="--make-pidfile"
 
 depend() {
-    need net
+    need net cgroups
     after local
     provide k3s
 }
@@ -136,7 +136,7 @@ command_user="root"
 start_stop_daemon_args="--make-pidfile"
 
 depend() {
-    need net
+    need net cgroups
     after local
     provide k3s
 }

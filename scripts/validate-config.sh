@@ -4,18 +4,32 @@
 
 set -e
 
+# Source logging library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
+
+if [ -f "$LIB_DIR/logging.sh" ]; then
+    . "$LIB_DIR/logging.sh"
+else
+    # Fallback logging functions
+    log_info() { echo "[INFO] $*"; }
+    log_error() { echo "[ERROR] $*" >&2; }
+    log_warn() { echo "[WARN] $*"; }
+    log_success() { echo "[SUCCESS] $*"; }
+fi
+
 # Load YAML parser
 source "$LIB_DIR/yaml-parser.sh"
 
 CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
-echo "=== Alpine k3s Configuration Validator ==="
-echo "Validating: $CONFIG_FILE"
+log_info "=== Alpine k3s Configuration Validator ==="
+log_info "Validating: $CONFIG_FILE"
 echo ""
 
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ Error: Configuration file '$CONFIG_FILE' not found"
+    log_error "Configuration file '$CONFIG_FILE' not found"
     echo "Please create cluster-config.yaml or specify a different file"
     exit 1
 fi
@@ -28,22 +42,22 @@ warnings=0
 
 # Function to report error
 report_error() {
-    echo "❌ Error: $1"
+    log_error "$1"
     errors=$((errors + 1))
 }
 
 # Function to report warning
 report_warning() {
-    echo "⚠️  Warning: $1"
+    log_warn "$1"
     warnings=$((warnings + 1))
 }
 
 # Function to report success
 report_ok() {
-    echo "✅ $1"
+    log_success "$1"
 }
 
-echo "Checking basic configuration structure..."
+log_info "Checking basic configuration structure..."
 
 # Basic structure validation
 if ! yaml_get "cluster.name" >/dev/null 2>&1; then
@@ -59,7 +73,7 @@ fi
 
 # Network validation
 echo ""
-echo "Validating network configuration..."
+log_info "Validating network configuration..."
 
 gateway=$(yaml_get "network.gateway")
 if [ -n "$gateway" ]; then
@@ -108,7 +122,7 @@ fi
 
 # Node validation
 echo ""
-echo "Validating node configuration..."
+log_info "Validating node configuration..."
 
 node_count=0
 master_count=0
@@ -202,7 +216,7 @@ done
 
 # k3s configuration validation
 echo ""
-echo "Validating k3s configuration..."
+log_info "Validating k3s configuration..."
 
 cluster_cidr=$(get_k3s_cluster_cidr)
 service_cidr=$(get_k3s_service_cidr)
@@ -221,7 +235,7 @@ fi
 
 # Services validation
 echo ""
-echo "Validating services configuration..."
+log_info "Validating services configuration..."
 
 if [ "$(get_service_enabled metallb)" = "true" ]; then
     metallb_version=$(get_service_version metallb)
@@ -251,7 +265,7 @@ fi
 
 # SSH configuration validation
 echo ""
-echo "Validating SSH configuration..."
+log_info "Validating SSH configuration..."
 
 ssh_port=$(yaml_get "ssh.port")
 if [ -n "$ssh_port" ] && [ "$ssh_port" -gt 0 ] && [ "$ssh_port" -lt 65536 ]; then
@@ -269,18 +283,18 @@ fi
 
 # Final summary
 echo ""
-echo "=== Validation Summary ==="
-echo "Errors: $errors"
-echo "Warnings: $warnings"
+log_info "=== Validation Summary ==="
+log_info "Errors: $errors"
+log_info "Warnings: $warnings"
 
 if [ "$errors" -eq 0 ]; then
     echo ""
-    echo "🎉 Configuration validation passed!"
-    echo "Your cluster configuration is ready for deployment."
+    log_success "Configuration validation passed!"
+    log_info "Your cluster configuration is ready for deployment."
     exit 0
 else
     echo ""
-    echo "💥 Configuration validation failed!"
-    echo "Please fix the errors above before proceeding."
+    log_error "Configuration validation failed!"
+    log_error "Please fix the errors above before proceeding."
     exit 1
 fi

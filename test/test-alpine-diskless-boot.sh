@@ -33,7 +33,9 @@ echo "  5. ⚙️  Your k3s_bootstrap runs automatically via local.d"
 echo ""
 
 # Configuration
-RAM_SIZE="2048M"  # 2GB RAM for k3s + package installation (Alpine diskless runs in RAM)
+# 4GB RAM needed for k3s with all components (API server, metrics-server, traefik, coredns)
+# 2GB is minimum but causes timeout issues under load
+RAM_SIZE="8096M"
 ALPINE_VERSION="3.22.1"
 VM_DIR="$TEST_DIR/vm-diskless"
 mkdir -p "$VM_DIR" 
@@ -206,11 +208,74 @@ if [ ! -d "$PROJECT_DIR/builds/k3s-21-apkovl" ] && [ ! -f "$PROJECT_DIR/builds/k
     exit 1
 fi
 
-# Download standard Alpine 
+# Download standard Alpine
 ALPINE_ISO="alpine-virt-${ALPINE_VERSION}-x86_64.iso"
 if [ ! -f "$ALPINE_ISO" ]; then
     echo "📥 Downloading Alpine Linux..."
     curl -L "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/${ALPINE_ISO}" -o "$ALPINE_ISO"
+fi
+
+# Extract kernel and initramfs for direct boot with custom kernel parameters
+KERNEL_FILE="vmlinuz-virt"
+INITRD_FILE="initramfs-virt"
+
+if [ ! -f "$KERNEL_FILE" ] || [ ! -f "$INITRD_FILE" ]; then
+    log "Extracting kernel and initramfs from ISO for direct boot..."
+
+    # Try multiple extraction methods
+    EXTRACTION_SUCCESS=false
+
+    # Method 1: Try bsdtar (built into macOS, works on Linux too)
+    if command -v bsdtar >/dev/null 2>&1; then
+        log "Using bsdtar to extract kernel and initramfs..."
+        if bsdtar -xf "$ALPINE_ISO" boot/vmlinuz-virt boot/initramfs-virt 2>/dev/null; then
+            if [ -f "boot/vmlinuz-virt" ] && [ -f "boot/initramfs-virt" ]; then
+                mv boot/vmlinuz-virt "$KERNEL_FILE"
+                mv boot/initramfs-virt "$INITRD_FILE"
+                rmdir boot 2>/dev/null || true
+                EXTRACTION_SUCCESS=true
+                log "Successfully extracted using bsdtar"
+            fi
+        fi
+    fi
+
+    # Method 2: Try 7z if available (works cross-platform)
+    if [ "$EXTRACTION_SUCCESS" = "false" ] && command -v 7z >/dev/null 2>&1; then
+        log "Using 7z to extract kernel and initramfs..."
+        if 7z e "$ALPINE_ISO" boot/vmlinuz-virt boot/initramfs-virt -o. >/dev/null 2>&1; then
+            if [ -f "vmlinuz-virt" ] && [ -f "initramfs-virt" ]; then
+                EXTRACTION_SUCCESS=true
+                log "Successfully extracted using 7z"
+            fi
+        fi
+    fi
+
+    # Method 3: Try direct mount on Linux
+    if [ "$EXTRACTION_SUCCESS" = "false" ] && [[ "$OSTYPE" != "darwin"* ]]; then
+        log "Trying direct mount method..."
+        ISO_MOUNT=$(mktemp -d)
+        if sudo mount -o loop,ro "$ALPINE_ISO" "$ISO_MOUNT" 2>/dev/null; then
+            if [ -f "$ISO_MOUNT/boot/vmlinuz-virt" ]; then
+                cp "$ISO_MOUNT/boot/vmlinuz-virt" "$KERNEL_FILE"
+                cp "$ISO_MOUNT/boot/initramfs-virt" "$INITRD_FILE"
+                EXTRACTION_SUCCESS=true
+                log "Successfully extracted using mount"
+            fi
+            sudo umount "$ISO_MOUNT"
+        fi
+        rmdir "$ISO_MOUNT"
+    fi
+
+    # Check if extraction succeeded
+    if [ "$EXTRACTION_SUCCESS" = "false" ]; then
+        log "ERROR: Could not extract kernel and initramfs from ISO"
+        log ""
+        log "Extraction tools tried: bsdtar, 7z, mount"
+        log "Please ensure one of these is available"
+        exit 1
+    fi
+
+    log "Kernel and initramfs ready for direct boot"
 fi
 
 # --- Step 2: Create persistent data disk if missing ---
@@ -263,7 +328,16 @@ EOF
     
     # Change hostname for testing
     echo "k3s-21-test" > etc/hostname
-    
+
+    # Fix k3s config for QEMU: replace RPi IP with QEMU IP (10.0.2.15)
+    log "Configuring k3s for QEMU network..."
+    if [ -f etc/k3s/config.yaml ]; then
+        # QEMU user-mode networking always assigns 10.0.2.15 to the guest
+        sed 's/192\.168\.254\.21/10.0.2.15/g' etc/k3s/config.yaml > etc/k3s/config.yaml.tmp
+        mv etc/k3s/config.yaml.tmp etc/k3s/config.yaml
+        log "Updated k3s config to use QEMU IP (10.0.2.15)"
+    fi
+
     # Disable networking service to avoid conflicts
     rm -f etc/runlevels/default/networking
     
@@ -394,22 +468,26 @@ if [ "$NETWORK_MODE" = "dhcp" ]; then
     echo "   • k3s API: localhost:6443"
     echo "   • Web services: localhost:8080"
     echo ""
-    
+
+    # Kernel command line matching RPi boot configuration with cgroups enabled
+    KERNEL_CMDLINE="modules=loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 console=tty1 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
+
+    echo "🔧 Booting with kernel parameters (matches RPi config):"
+    echo "   $KERNEL_CMDLINE"
+    echo ""
+
     qemu-system-x86_64 \
       -m $RAM_SIZE \
+      -kernel "$KERNEL_FILE" \
+      -initrd "$INITRD_FILE" \
+      -append "$KERNEL_CMDLINE" \
       -cdrom "$ALPINE_ISO" \
-      -boot d \
       -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=1.1.1.1 \
       -device virtio-net-pci,netdev=net0 \
       -drive file="$DATA_DISK",format=qcow2 \
-      -drive file=fat:rw:"$OVERLAY_DIR",format=raw \
-      #-nographic 
-      #-serial mon:stdio \
-      #-serial file:/tmp/qemu-serial.log \
-      #-netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=8.8.8.8 \
-      #-device virtio-net-pci,netdev=net0 \
-      #-netdev user,id=net0,dns=8.8.8.8 \
-      #-device virtio-net-pci,netdev=net0 \
+      -drive file=fat:rw:"$OVERLAY_DIR",format=raw
+
+      #-nographic \
 
 elif [ "$NETWORK_MODE" = "bridge" ]; then
     echo "📝 Bridge Mode - Creates realistic network environment:"
@@ -421,11 +499,20 @@ elif [ "$NETWORK_MODE" = "bridge" ]; then
     echo "   sudo ip addr add 192.168.1.254/24 dev br0"
     echo "   sudo ip link set br0 up"
     echo ""
-    
+
+    # Kernel command line matching RPi boot configuration with cgroups enabled
+    KERNEL_CMDLINE="modules loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 console=tty1 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
+
+    echo "🔧 Booting with kernel parameters (matches RPi config):"
+    echo "   $KERNEL_CMDLINE"
+    echo ""
+
     qemu-system-x86_64 \
       -m $RAM_SIZE \
+      -kernel "$KERNEL_FILE" \
+      -initrd "$INITRD_FILE" \
+      -append "$KERNEL_CMDLINE" \
       -cdrom "$ALPINE_ISO" \
-      -boot d \
       -drive file="$DATA_DISK",format=qcow2 \
       -drive file=fat:rw:"$OVERLAY_DIR",format=raw \
       -netdev bridge,id=net0,br=br0 \
@@ -454,7 +541,8 @@ echo ""
 echo "🔄 Alpine diskless boot simulation completed."
 # Note: Alpine diskless architecture memory usage breakdown:
 # - Alpine base system: ~100MB
-# - Runtime apkovl extraction (full snapshot): ~200-500MB  
+# - Runtime apkovl extraction (full snapshot): ~200-500MB
 # - Package installation (system-bootstrap): ~300-500MB
-# - k3s runtime: ~500MB-1GB
-# Total recommended: 2GB minimum for comfortable operation
+# - k3s server + kubelet: ~500MB-1GB
+# - System pods (coredns, metrics-server, traefik): ~400-600MB
+# Total recommended: 4GB for full k3s testing (2GB causes timeout issues)
