@@ -239,8 +239,8 @@ command="/usr/local/bin/system_bootstrap"
 command_background=false
 
 depend() {
-    need localmount storage-init
-    after localmount storage-init
+    need localmount storage-init ssh-persist
+    after localmount storage-init ssh-persist
     before k3s-bootstrap
     provide system-bootstrap
 }
@@ -341,59 +341,9 @@ rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
 
-_logger "=== Setting up SSH access ==="
+# NOTE: SSH setup is handled by the ssh-persist service (runs on every boot)
+# This ensures SSH persists across reboots without depending on LBU backup/restore
 
-# Install and enable SSH
-if ! rc-service sshd status >/dev/null 2>&1; then
-    _logger "Installing OpenSSH..."
-    if apk add --no-cache openssh; then
-        _logger "OpenSSH installed successfully"
-        
-        _logger "Generating SSH host keys..."
-        if ssh-keygen -A; then
-            _logger "SSH host keys generated"
-        else
-            _logger "WARNING: Failed to generate SSH host keys"
-        fi
-        
-        _logger "Enabling SSH service..."
-        if rc-update add sshd default && rc-service sshd start; then
-            _logger "SSH service enabled and started"
-        else
-            _logger "ERROR: Failed to enable SSH service"
-            exit 1
-        fi
-    else
-        _logger "ERROR: Failed to install OpenSSH"
-        exit 1
-    fi
-else
-    _logger "SSH service is already running"
-fi
-
-# Fix SSH OpenSSL version mismatch by ensuring fresh installation
-_logger "Setting up SSH with fresh OpenSSL"
-echo "🔑 Setting up SSH with fresh OpenSSL..."
-apk del openssh-server openssh 2>/dev/null || true
-_apk add openssh-server
-_apk add openssh
-
-# Generate fresh SSH host keys to avoid OpenSSL version issues
-rm -f /etc/ssh/ssh_host_*_key*
-# Generate only the key types we use (skip deprecated DSA)
-ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key -N "" -q
-ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -N "" -q  
-ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
-
-# Fix ownership of SSH files (critical for SSH security)
-_logger "Fixing SSH file ownership and permissions"
-echo "🔐 Setting proper SSH file ownership..."
-chown -R root:root /root /etc/ssh
-chmod 700 /root/.ssh 2>/dev/null || true
-chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
-chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
-
-rc-update add sshd default
 rc-update add savecache shutdown
 
 # Configure LBU (Local Backup Utility)
@@ -402,10 +352,15 @@ LBU_BACKUPDIR=/mnt/data
 LBU_CONF_EOF
 
 # Create a wrapper script for lbu commit with custom naming
+# NOTE: This is a minimal config-only backup. Large data is persisted via bind mounts:
+#   - /var/lib/rancher/k3s -> /mnt/data/var-lib-rancher-k3s
+#   - /etc/k3s -> /mnt/data/k3s
+#   - SSH keys -> /mnt/data/ssh (via ssh-persist service)
+#   - APK packages -> /mnt/data/apk-cache (via symlink)
 cat > /usr/local/bin/lbu-commit-runtime << 'LBU_SCRIPT_EOF'
 #!/bin/sh
-# Custom LBU commit script that creates full system snapshot
-# This preserves ALL runtime changes, not just /etc
+# Minimal config backup script - only saves essential configuration files
+# Large data (k3s, containers) is already persisted via bind mounts
 
 HOSTNAME=$(hostname)
 BACKUP_FILE="/mnt/data/runtime-${HOSTNAME}.apkovl.tar.gz"
@@ -420,54 +375,64 @@ if [ ! -w "/mnt/data" ]; then
     }
 fi
 
-echo "Creating full system snapshot for runtime preservation..."
+echo "Creating minimal config snapshot..."
 
 # Clean up any previous temp directory
 rm -rf "$TEMP_DIR"
 mkdir -p "$TEMP_DIR"
 
-# Copy all critical directories that contain runtime changes
-# /etc - all configuration files
-if [ -d /etc ]; then
-    echo "  📋 Capturing /etc (configurations)..."
-    cp -a /etc "$TEMP_DIR/" 2>/dev/null || true
-fi
+# Only capture essential configuration files (NOT large data dirs)
+# These are files that may change at runtime and aren't covered by bind mounts
 
-# /usr/local - custom scripts and binaries
-if [ -d /usr/local ]; then
-    echo "  🔧 Capturing /usr/local (custom scripts)..."
-    mkdir -p "$TEMP_DIR/usr"
-    cp -a /usr/local "$TEMP_DIR/usr/" 2>/dev/null || true
-fi
+# /etc - selective capture (skip large/transient dirs)
+mkdir -p "$TEMP_DIR/etc"
+echo "  📋 Capturing essential /etc configs..."
+# Core system config
+cp -a /etc/hostname "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/hosts "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/resolv.conf "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/passwd "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/shadow "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/group "$TEMP_DIR/etc/" 2>/dev/null || true
+# Network config
+cp -a /etc/network "$TEMP_DIR/etc/" 2>/dev/null || true
+# SSH config (keys are in /mnt/data/ssh via ssh-persist)
+cp -a /etc/ssh "$TEMP_DIR/etc/" 2>/dev/null || true
+# APK config
+cp -a /etc/apk "$TEMP_DIR/etc/" 2>/dev/null || true
+# Init scripts and runlevels
+cp -a /etc/init.d "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/runlevels "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/local.d "$TEMP_DIR/etc/" 2>/dev/null || true
+# LBU config
+cp -a /etc/lbu "$TEMP_DIR/etc/" 2>/dev/null || true
+# Timezone
+cp -a /etc/timezone "$TEMP_DIR/etc/" 2>/dev/null || true
+cp -a /etc/localtime "$TEMP_DIR/etc/" 2>/dev/null || true
 
-# /root - SSH keys and root user files
-if [ -d /root ]; then
-    echo "  🔑 Capturing /root (SSH keys, configs)..."
-    cp -a /root "$TEMP_DIR/" 2>/dev/null || true
-fi
-
-# /var - selective capture (lib, but not cache/log/tmp)
-echo "  💾 Capturing /var (selective: lib only, skipping cache/log/tmp)..."
-mkdir -p "$TEMP_DIR/var"
-if [ -d /var/lib ]; then
-    cp -a /var/lib "$TEMP_DIR/var/" 2>/dev/null || true
+# /root/.ssh - authorized keys
+if [ -d /root/.ssh ]; then
+    echo "  🔑 Capturing /root/.ssh..."
+    mkdir -p "$TEMP_DIR/root"
+    cp -a /root/.ssh "$TEMP_DIR/root/" 2>/dev/null || true
 fi
 
 # Create the runtime snapshot tarball
 cd "$TEMP_DIR"
 if tar -czf "$BACKUP_FILE" . 2>/dev/null; then
-    echo "✅ Runtime overlay saved as: $BACKUP_FILE"
+    echo "✅ Runtime config saved: $BACKUP_FILE"
     # Verify the archive
     if tar -tzf "$BACKUP_FILE" >/dev/null 2>&1; then
         ARCHIVE_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
         FILE_COUNT=$(tar -tzf "$BACKUP_FILE" | wc -l)
-        echo "   Archive size: $ARCHIVE_SIZE ($FILE_COUNT files)"
+        echo "   Size: $ARCHIVE_SIZE ($FILE_COUNT files)"
         sync
     else
-        echo "⚠️  Warning: Archive verification failed"
+        echo "⚠️  Warning: Archive verification failed, removing corrupted file"
+        rm -f "$BACKUP_FILE"
     fi
 else
-    echo "❌ ERROR: Failed to create runtime overlay"
+    echo "❌ ERROR: Failed to create config backup"
     cd /
     rm -rf "$TEMP_DIR"
     exit 1
@@ -477,7 +442,7 @@ fi
 cd /
 rm -rf "$TEMP_DIR"
 
-echo "Runtime snapshot complete"
+echo "Config snapshot complete"
 LBU_SCRIPT_EOF
 chmod +x /usr/local/bin/lbu-commit-runtime
 
@@ -508,29 +473,7 @@ etc/runlevels/default/lbu-persist
 root/.ssh/authorized_keys
 LBU_EOF
 
-# Ensure SSH authorized_keys is persistent and included in LBU
-if [ -f /root/.ssh/authorized_keys ]; then
-    # Make sure the file is writable so LBU can include it
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
-    # Copy the file to ensure it's in a writable location
-    cp -a /root/.ssh/authorized_keys /root/.ssh/authorized_keys.tmp
-    mv /root/.ssh/authorized_keys.tmp /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-    chown root:root /root/.ssh/authorized_keys
-    _logger "SSH authorized_keys made persistent for LBU backup"
-    
-    # CRITICAL: Also immediately save to the alpine-backup location
-    # This ensures SSH keys survive even if LBU backup has issues
-    if [ -d /mnt/data ]; then
-        mkdir -p /mnt/data/alpine-backup/root/.ssh
-        cp -a /root/.ssh/authorized_keys /mnt/data/alpine-backup/root/.ssh/
-        chmod 600 /mnt/data/alpine-backup/root/.ssh/authorized_keys
-        chown root:root /mnt/data/alpine-backup/root/.ssh/authorized_keys
-        _logger "SSH authorized_keys also saved to alpine-backup as failsafe"
-        sync
-    fi
-fi
+# NOTE: SSH authorized_keys persistence is handled by ssh-persist service
 
 # Mark system initialization as complete (both RAM and persistent storage)
 touch /usr/local/bin/.system-initialized

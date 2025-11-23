@@ -143,15 +143,18 @@ EOF
         chmod 600 "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
     fi
 
-    # Create minimal fstab (storage-init handles all dynamic mounting)
-    # No need for device entries since storage-init auto-detects and mounts
-    # both SD cards (/dev/mmcblk0) and USB devices (/dev/sda, /dev/vda)
+    # Create minimal fstab with basic entries to satisfy fstabinfo
+    # storage-init handles actual data partition mounting dynamically
     cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
-# Alpine diskless k3s cluster - Dynamic storage mounting
-# Storage devices are auto-detected and mounted by the storage-init service
-# This supports SD cards (/dev/mmcblk0), USB devices (/dev/sda), and virtio (/dev/vda)
-#
-# No static device entries needed - everything is handled dynamically at boot
+# Alpine diskless k3s cluster
+# Data partition mounting is handled dynamically by storage-init service
+
+# Standard pseudo-filesystems (required for clean boot)
+proc            /proc           proc    defaults        0 0
+sysfs           /sys            sysfs   defaults        0 0
+devpts          /dev/pts        devpts  defaults        0 0
+tmpfs           /tmp            tmpfs   nosuid,nodev    0 0
+tmpfs           /run            tmpfs   nosuid,nodev    0 0
 EOF
 
     # Create comprehensive Alpine initialization script
@@ -351,6 +354,8 @@ SCRIPT_EOF
     ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
     # Enable storage-init service to run before system-bootstrap
     ln -sf /etc/init.d/storage-init "${NODE_NAME}-apkovl/etc/runlevels/default/storage-init"
+    # Enable ssh-persist service to run after storage-init (idempotent SSH on every boot)
+    ln -sf /etc/init.d/ssh-persist "${NODE_NAME}-apkovl/etc/runlevels/default/ssh-persist"
     # Enable k3s-bootstrap service to run after storage-init
     ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
@@ -552,19 +557,49 @@ start() {
 
     # Check if Alpine already mounted the data partition (common during boot)
     # Alpine mounts partitions to /media/<partition-name>
-    # Extract just the partition name from the full path (e.g., /dev/sda2 -> sda2)
+    # Note: In QEMU testing, we create /dev/mmcblk0p2 as a block device with same
+    # major:minor as /dev/sda2, but Alpine mounts the real device at /media/sda2
     PARTITION_NAME=$(basename "$DATA_PARTITION")
     ALPINE_MOUNT_POINT=""
 
+    # First, check if mounted by our partition name (e.g., mmcblk0p2)
     if mountpoint -q "/media/$PARTITION_NAME" 2>/dev/null; then
         ALPINE_MOUNT_POINT="/media/$PARTITION_NAME"
         einfo "Data partition already mounted by Alpine at /media/$PARTITION_NAME"
+    else
+        # Check if the same device (by major:minor) is mounted elsewhere in /media
+        # This handles QEMU simulation where mmcblk0p2 and sda2 share the same major:minor
+        if [ -b "$DATA_PARTITION" ]; then
+            DATA_MAJOR_MINOR=$(stat -c "%t:%T" "$DATA_PARTITION" 2>/dev/null)
+            for media_mount in /media/*; do
+                if [ -d "$media_mount" ] && mountpoint -q "$media_mount" 2>/dev/null; then
+                    # Get the device mounted here
+                    MOUNTED_DEV=$(mount | grep " $media_mount " | awk '{print $1}')
+                    if [ -b "$MOUNTED_DEV" ]; then
+                        MOUNTED_MAJOR_MINOR=$(stat -c "%t:%T" "$MOUNTED_DEV" 2>/dev/null)
+                        if [ "$DATA_MAJOR_MINOR" = "$MOUNTED_MAJOR_MINOR" ]; then
+                            ALPINE_MOUNT_POINT="$media_mount"
+                            einfo "Data partition already mounted by Alpine at $media_mount (same device)"
+                            break
+                        fi
+                    fi
+                fi
+            done
+        fi
     fi
 
     # Mount data partition
     mkdir -p /mnt/data
     if [ -n "$ALPINE_MOUNT_POINT" ]; then
-        # Alpine already mounted it - create bind mount to /mnt/data
+        # Alpine already mounted it - remount read-write if needed, then bind mount
+        # Alpine often mounts partitions read-only during boot
+        if mount | grep " $ALPINE_MOUNT_POINT " | grep -q "[ (]ro[,)]"; then
+            einfo "Remounting $ALPINE_MOUNT_POINT as read-write..."
+            mount -o remount,rw "$ALPINE_MOUNT_POINT" || {
+                ewarn "Could not remount as read-write, trying to continue..."
+            }
+        fi
+
         einfo "Creating bind mount from $ALPINE_MOUNT_POINT to /mnt/data..."
         if mount --bind "$ALPINE_MOUNT_POINT" /mnt/data; then
             einfo "Storage bind-mounted at /mnt/data (source: $ALPINE_MOUNT_POINT)"
@@ -658,13 +693,15 @@ start() {
     fi
 
     # Create directories for k3s, APK cache, LBU config, and usr/local/bin
-    mkdir -p /mnt/data/k3s /mnt/data/etc-persistent /mnt/data/var-lib-k3s /mnt/data/var-cache-apk /mnt/data/etc-lbu /mnt/data/usr-local-bin
+    mkdir -p /mnt/data/k3s /mnt/data/etc-persistent /mnt/data/var-lib-k3s /mnt/data/apk-cache /mnt/data/etc-lbu /mnt/data/usr-local-bin
 
-    # Set up APK cache bind mount to persistent storage
-    if ! mountpoint -q /var/cache/apk 2>/dev/null; then
-        einfo "Setting up APK cache on persistent storage"
-        mount --bind /mnt/data/var-cache-apk /var/cache/apk
-        eend $? "APK cache mount"
+    # Set up APK local cache (Alpine's official mechanism)
+    # This enables packages to be cached and restored across reboots
+    if [ ! -L /etc/apk/cache ]; then
+        einfo "Setting up APK local cache on persistent storage"
+        mkdir -p /mnt/data/apk-cache
+        ln -sf /mnt/data/apk-cache /etc/apk/cache
+        eend $? "APK cache symlink"
     fi
 
     # Set up LBU config bind mount to persistent storage
@@ -706,6 +743,112 @@ stop() {
 }
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/storage-init"
+
+    # Create ssh-persist OpenRC service (idempotent SSH setup on every boot)
+    cat > "${NODE_NAME}-apkovl/etc/init.d/ssh-persist" << 'EOF'
+#!/sbin/openrc-run
+
+description="Persistent SSH setup service"
+name="ssh persist"
+
+depend() {
+    need storage-init
+    after storage-init
+    before system-bootstrap
+    provide ssh-persist
+}
+
+start() {
+    ebegin "Setting up persistent SSH"
+
+    # Persistent storage location for SSH
+    SSH_PERSIST_DIR="/mnt/data/ssh"
+
+    # Wait for storage to be ready
+    if [ ! -d /mnt/data ] || ! mountpoint -q /mnt/data 2>/dev/null; then
+        ewarn "Persistent storage not available, SSH may not persist across reboots"
+    else
+        mkdir -p "$SSH_PERSIST_DIR"
+    fi
+
+    # Install openssh packages (always check for ssh-keygen as it's required for key generation)
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+        einfo "Installing OpenSSH packages..."
+        apk update >/dev/null 2>&1
+        if apk add openssh openssh-server openssh-keygen; then
+            einfo "OpenSSH installed successfully"
+        else
+            eerror "Failed to install OpenSSH"
+            eend 1 "OpenSSH installation failed"
+            return 1
+        fi
+    fi
+
+    # Restore or generate SSH host keys
+    if [ -d "$SSH_PERSIST_DIR" ] && [ -f "$SSH_PERSIST_DIR/ssh_host_ed25519_key" ]; then
+        einfo "Restoring SSH host keys from persistent storage..."
+        cp -a "$SSH_PERSIST_DIR"/ssh_host_*_key* /etc/ssh/ 2>/dev/null
+        chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null
+        chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null
+    else
+        einfo "Generating new SSH host keys..."
+        rm -f /etc/ssh/ssh_host_*_key*
+        ssh-keygen -t rsa -f /etc/ssh/ssh_host_rsa_key -N "" -q
+        ssh-keygen -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key -N "" -q
+        ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
+
+        # Save to persistent storage
+        if [ -d "$SSH_PERSIST_DIR" ]; then
+            einfo "Saving SSH host keys to persistent storage..."
+            cp -a /etc/ssh/ssh_host_*_key* "$SSH_PERSIST_DIR/" 2>/dev/null
+        fi
+    fi
+
+    # Restore authorized_keys from persistent storage if available
+    if [ -d "$SSH_PERSIST_DIR" ] && [ -f "$SSH_PERSIST_DIR/authorized_keys" ]; then
+        einfo "Restoring authorized_keys from persistent storage..."
+        mkdir -p /root/.ssh
+        cp -a "$SSH_PERSIST_DIR/authorized_keys" /root/.ssh/authorized_keys
+    fi
+
+    # Ensure /root and .ssh have correct ownership and permissions
+    # (apkovl files may have wrong ownership from build host)
+    chown root:root /root
+    chmod 700 /root
+
+    if [ -f /root/.ssh/authorized_keys ]; then
+        chmod 700 /root/.ssh
+        chmod 600 /root/.ssh/authorized_keys
+        chown -R root:root /root/.ssh
+
+        # Save to persistent storage if not already there
+        if [ -d "$SSH_PERSIST_DIR" ] && [ ! -f "$SSH_PERSIST_DIR/authorized_keys" ]; then
+            cp -a /root/.ssh/authorized_keys "$SSH_PERSIST_DIR/authorized_keys"
+        fi
+    fi
+
+    # Ensure sshd_config has correct permissions
+    chmod 644 /etc/ssh/sshd_config 2>/dev/null
+
+    # Enable and start sshd
+    if ! rc-service sshd status >/dev/null 2>&1; then
+        einfo "Starting SSH service..."
+        rc-update add sshd default 2>/dev/null
+        rc-service sshd start
+    else
+        einfo "SSH service already running"
+    fi
+
+    eend 0 "SSH setup complete"
+}
+
+stop() {
+    ebegin "Stopping ssh-persist service"
+    # Nothing to do - sshd has its own stop
+    eend 0
+}
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/ssh-persist"
 
     # NOTE: lbu-restore service removed - Alpine's init automatically loads
     # any .apkovl.tar.gz files it finds on mounted partitions during boot.
