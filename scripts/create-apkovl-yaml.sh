@@ -250,44 +250,32 @@ else
     echo "⚠️  Bridge networking not available - k3s may have limited functionality"
 fi
 
-# Set up bind mounts (always needed)
-echo "🔗 Setting up bind mounts..."
-mkdir -p /etc/k3s /var/lib/rancher/k3s
-
-# Ensure persistent k3s directories exist
-mkdir -p $DATA_MOUNT/k3s $DATA_MOUNT/var-lib-rancher-k3s
-
-# Copy overlay config to persistent storage if it doesn't exist there
-if [ -f /etc/k3s/config.yaml ] && [ ! -f $DATA_MOUNT/k3s/config.yaml ]; then
-    echo "📋 Copying overlay k3s config to persistent storage..."
-    cp /etc/k3s/config.yaml $DATA_MOUNT/k3s/config.yaml
-    echo "✅ k3s config copied to persistent storage"
-fi
-
-# Idempotent bind mounts - only mount if not already mounted
-if ! mountpoint -q /etc/k3s 2>/dev/null; then
-    echo "📎 Mounting /etc/k3s..."
-    mount --bind $DATA_MOUNT/k3s /etc/k3s
-else
-    echo "✅ /etc/k3s already mounted"
-fi
-
-if ! mountpoint -q /var/lib/rancher/k3s 2>/dev/null; then
-    echo "📎 Mounting /var/lib/rancher/k3s..."
-    mount --bind $DATA_MOUNT/var-lib-rancher-k3s /var/lib/rancher/k3s
-else
-    echo "✅ /var/lib/rancher/k3s already mounted"
-fi
+# Note: k3s bind mounts (/etc/k3s, /var/lib/rancher/k3s) are set up by storage-init service
 
 # Install k3s if not present
 echo "🚀 Installing k3s..."
 if [ ! -f /usr/local/bin/k3s ]; then
     _logger "Downloading and installing k3s"
     echo "📥 Downloading k3s..."
+
+    # Save our custom init script before k3s installer overwrites it
+    if [ -f /etc/init.d/k3s ]; then
+        cp /etc/init.d/k3s /tmp/k3s-init-custom
+        echo "📋 Saved custom k3s init script"
+    fi
+
     wget -qO- https://get.k3s.io | sh -
     if [ \$? -eq 0 ]; then
         echo "✅ k3s installed successfully"
         _logger "k3s installation completed successfully"
+
+        # Restore our custom init script (overrides the one from k3s installer)
+        if [ -f /tmp/k3s-init-custom ]; then
+            cp /tmp/k3s-init-custom /etc/init.d/k3s
+            chmod +x /etc/init.d/k3s
+            rm /tmp/k3s-init-custom
+            echo "📋 Restored custom k3s init script with storage-init dependency"
+        fi
     else
         echo "❌ k3s installation failed"
         _logger "k3s installation failed"
@@ -378,13 +366,14 @@ depend() {
     provide k3s-bootstrap
 }
 
-start_pre() {
+start() {
     # Check if bootstrap has already run successfully
     if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
         einfo "k3s bootstrap already completed - skipping"
-        return 1
+        mark_service_started
+        return 0
     fi
-    
+
     # Wait for storage-init to complete
     ebegin "Waiting for storage initialization to complete"
     local timeout=300  # 5 minutes max
@@ -397,25 +386,20 @@ start_pre() {
         sleep 1
         count=$((count + 1))
     done
-    
+
     if [ $count -ge $timeout ]; then
         eerror "Timeout waiting for disk setup to complete"
         return 1
     fi
-    
+
     # Ensure the k3s_bootstrap script exists
     if [ ! -x /usr/local/bin/k3s_bootstrap ]; then
         eerror "k3s_bootstrap script not found at /usr/local/bin/k3s_bootstrap"
         return 1
     fi
-    
-    ebegin "Starting k3s bootstrap"
-    return 0
-}
 
-start() {
     ebegin "Running k3s cluster bootstrap"
-    
+
     # Run the bootstrap script and capture output
     if /usr/local/bin/k3s_bootstrap; then
         # Mark bootstrap as complete only on successful execution
@@ -449,17 +433,6 @@ depend() {
     after localmount
     before system-bootstrap k3s-bootstrap
     provide storage-init
-}
-
-start_pre() {
-    # Check if storage initialization has already been completed
-    if [ -f /mnt/data/.storage-init-complete ]; then
-        einfo "Storage initialization already completed - skipping"
-        return 1
-    fi
-
-    ebegin "Preparing storage initialization"
-    return 0
 }
 
 start() {
@@ -730,6 +703,28 @@ start() {
         eend $? "/usr/local/bin mount"
     fi
 
+    # Set up k3s config bind mount to persistent storage
+    mkdir -p /mnt/data/k3s /mnt/data/var-lib-rancher-k3s
+    mkdir -p /etc/k3s /var/lib/rancher/k3s
+
+    # Copy overlay k3s config to persistent storage if it doesn't exist there
+    if [ -f /etc/k3s/config.yaml ] && [ ! -f /mnt/data/k3s/config.yaml ]; then
+        einfo "Copying overlay k3s config to persistent storage"
+        cp /etc/k3s/config.yaml /mnt/data/k3s/config.yaml
+    fi
+
+    if ! mountpoint -q /etc/k3s 2>/dev/null; then
+        einfo "Setting up /etc/k3s on persistent storage"
+        mount --bind /mnt/data/k3s /etc/k3s
+        eend $? "/etc/k3s mount"
+    fi
+
+    if ! mountpoint -q /var/lib/rancher/k3s 2>/dev/null; then
+        einfo "Setting up /var/lib/rancher/k3s on persistent storage"
+        mount --bind /mnt/data/var-lib-rancher-k3s /var/lib/rancher/k3s
+        eend $? "/var/lib/rancher/k3s mount"
+    fi
+
     # Mark storage initialization as complete
     echo "$(date): Storage initialization completed successfully" > /mnt/data/.storage-init-complete
 
@@ -907,33 +902,6 @@ EOF
 
     # Enable lbu-persist service (lbu-restore not needed - Alpine auto-loads apkovl)
     ln -sf /etc/init.d/lbu-persist "${NODE_NAME}-apkovl/etc/runlevels/default/lbu-persist"
-
-    # Create simple console notification (no longer needed with proper OpenRC service)
-    # The k3s-bootstrap service handles all console output
-    
-    # Create periodic save script for additional persistent data
-    cat > "${NODE_NAME}-apkovl/etc/local.d/20-save-persistent.start" << EOF
-#!/bin/sh
-
-# Simple logger function
-_log() { echo "\$*" | tee -a /var/log/messages 2>/dev/null || echo "\$*"; }
-
-_log "=== Setting up persistent data saves ==="
-
-# Save additional persistent etc files (k3s data is already bind-mounted)
-mkdir -p $DATA_MOUNT/etc-persistent
-cp /etc/hostname $DATA_MOUNT/etc-persistent/ 2>/dev/null || true
-cp /etc/resolv.conf $DATA_MOUNT/etc-persistent/ 2>/dev/null || true
-
-# Create a cron job for periodic saves (every 5 minutes)
-echo "*/5 * * * * cp /etc/hostname /etc/resolv.conf $DATA_MOUNT/etc-persistent/ 2>/dev/null && sync" | crontab - 2>/dev/null || true
-
-# Initial sync
-sync
-
-_log "=== Persistent data save setup complete ==="
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/local.d/20-save-persistent.start"
 
 done
 

@@ -74,42 +74,36 @@ EOF
             fi
         done
 
-        # Master startup script
+        # Master startup script (based on official k3s installer format)
         cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << EOF
 #!/sbin/openrc-run
 
-name="k3s"
-description="Lightweight Kubernetes"
-command="/usr/local/bin/k3s"
-command_args="server --config /etc/k3s/config.yaml --token $K3S_TOKEN"
-command_background="yes"
-pidfile="/var/run/k3s.pid"
-command_user="root"
-start_stop_daemon_args="--make-pidfile"
-
 depend() {
-    need net cgroups
-    after local
-    provide k3s
+    after network-online
+    want cgroups
+    need storage-init
 }
 
 start_pre() {
-    # Ensure cgroups are properly set up
-    if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
-        # cgroup v2
-        echo "+cpu +memory +pids" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-    fi
-    
-    # Load required kernel modules
-    modprobe br_netfilter 2>/dev/null || true
-    modprobe overlay 2>/dev/null || true
-    
-    # Set kernel parameters
-    echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || true
-    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-    
-    return 0
+    rm -f /tmp/k3s.*
 }
+
+supervisor=supervise-daemon
+name=k3s
+command="/usr/local/bin/k3s"
+command_args="server --config /etc/k3s/config.yaml --token $K3S_TOKEN >>/var/log/k3s.log 2>&1"
+
+output_log=/var/log/k3s.log
+error_log=/var/log/k3s.log
+
+pidfile="/var/run/k3s.pid"
+respawn_delay=5
+respawn_max=0
+
+set -o allexport
+if [ -f /etc/environment ]; then . /etc/environment; fi
+if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
+set +o allexport
 EOF
 
     else
@@ -122,46 +116,36 @@ server: https://$MASTER_IP:6443
 node-ip: $NODE_IP
 EOF
 
-        # Agent startup script
+        # Agent startup script (based on official k3s installer format)
         cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << EOF
 #!/sbin/openrc-run
 
-name="k3s"
-description="Lightweight Kubernetes Agent"
-command="/usr/local/bin/k3s"
-command_args="agent --config /etc/k3s/config.yaml --token $K3S_TOKEN"
-command_background="yes"
-pidfile="/var/run/k3s.pid"
-command_user="root"
-start_stop_daemon_args="--make-pidfile"
-
 depend() {
-    need net cgroups
-    after local
-    provide k3s
+    after network-online
+    want cgroups
+    need storage-init
 }
 
 start_pre() {
-    # Wait for master to be ready
-    timeout=300
-    while [ \$timeout -gt 0 ]; do
-        if nc -z $MASTER_IP 6443; then
-            break
-        fi
-        sleep 5
-        timeout=\$((timeout - 5))
-    done
-    
-    # Load required kernel modules
-    modprobe br_netfilter 2>/dev/null || true
-    modprobe overlay 2>/dev/null || true
-    
-    # Set kernel parameters
-    echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || true
-    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-    
-    return 0
+    rm -f /tmp/k3s.*
 }
+
+supervisor=supervise-daemon
+name=k3s
+command="/usr/local/bin/k3s"
+command_args="agent --config /etc/k3s/config.yaml --token $K3S_TOKEN >>/var/log/k3s.log 2>&1"
+
+output_log=/var/log/k3s.log
+error_log=/var/log/k3s.log
+
+pidfile="/var/run/k3s.pid"
+respawn_delay=5
+respawn_max=0
+
+set -o allexport
+if [ -f /etc/environment ]; then . /etc/environment; fi
+if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
+set +o allexport
 EOF
     fi
     

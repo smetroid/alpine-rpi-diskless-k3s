@@ -235,9 +235,6 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 description="Alpine diskless system initialization service"
 name="system bootstrap"
 
-command="/usr/local/bin/system_bootstrap"
-command_background=false
-
 depend() {
     need localmount storage-init ssh-persist
     after localmount storage-init ssh-persist
@@ -245,7 +242,14 @@ depend() {
     provide system-bootstrap
 }
 
-start_pre() {
+start() {
+    # Check if already completed
+    if [ -f /mnt/data/.system-initialized ]; then
+        einfo "System already initialized - skipping"
+        mark_service_started
+        return 0
+    fi
+
     # Create the actual system bootstrap script
     cat > /usr/local/bin/system_bootstrap << 'SCRIPT_EOF'
 #!/bin/sh
@@ -488,6 +492,16 @@ lbu-commit-runtime
 exit 0
 SCRIPT_EOF
     chmod +x /usr/local/bin/system_bootstrap
+
+    # Run the bootstrap script
+    ebegin "Running system bootstrap"
+    if /usr/local/bin/system_bootstrap; then
+        eend 0 "System bootstrap completed"
+        return 0
+    else
+        eend 1 "System bootstrap failed"
+        return 1
+    fi
 }
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
@@ -499,23 +513,20 @@ EOF
 description="k3s cluster bootstrap service"
 name="k3s bootstrap"
 
-command="/usr/local/bin/k3s_bootstrap"
-command_background=false
-pidfile="/run/${RC_SVCNAME}.pid"
-
 depend() {
     need system-bootstrap
     after system-bootstrap
     provide k3s-bootstrap
 }
 
-start_pre() {
+start() {
     # Check if bootstrap has already run successfully
     if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
         einfo "k3s bootstrap already completed - skipping"
-        return 1
+        mark_service_started
+        return 0
     fi
-    
+
     # Wait for system-bootstrap to complete
     ebegin "Waiting for system bootstrap to complete"
     local timeout=300  # 5 minutes max
@@ -528,25 +539,20 @@ start_pre() {
         sleep 1
         count=$((count + 1))
     done
-    
+
     if [ $count -ge $timeout ]; then
         eerror "Timeout waiting for system bootstrap to complete"
         return 1
     fi
-    
+
     # Ensure the k3s_bootstrap script exists
     if [ ! -x /usr/local/bin/k3s_bootstrap ]; then
         eerror "k3s_bootstrap script not found at /usr/local/bin/k3s_bootstrap"
         return 1
     fi
-    
-    ebegin "Starting k3s bootstrap"
-    return 0
-}
 
-start() {
     ebegin "Running k3s cluster bootstrap"
-    
+
     # Run the bootstrap script and capture output
     if /usr/local/bin/k3s_bootstrap; then
         # Mark bootstrap as complete only on successful execution
