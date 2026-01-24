@@ -143,6 +143,37 @@ EOF
         chmod 600 "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
     fi
 
+    # Configure chrony for NTP time synchronization
+    mkdir -p "${NODE_NAME}-apkovl/etc/chrony"
+    cat > "${NODE_NAME}-apkovl/etc/chrony/chrony.conf" << EOF
+# Use public NTP servers from pool.ntp.org
+pool 2.pool.ntp.org iburst
+
+# Record the rate at which the system clock gains/losses time
+driftfile /var/lib/chrony/chrony.drift
+
+# Allow the system clock to be stepped in the first three updates
+# This is important for diskless systems that may have significant time drift on boot
+makestep 1.0 3
+
+# Enable kernel synchronization of the real-time clock (RTC)
+rtcsync
+
+# Allow NTP client access from local network
+# This allows worker nodes to optionally sync from master node
+allow 192.168.0.0/16
+allow 10.0.0.0/8
+
+# Serve time even if not synchronized to a time source
+local stratum 10
+
+# Log measurements and statistics
+logdir /var/log/chrony
+EOF
+
+    # Create persistent chrony directory structure
+    mkdir -p "${NODE_NAME}-apkovl/var/lib/chrony"
+
     # Create minimal fstab with basic entries to satisfy fstabinfo
     # storage-init handles actual data partition mounting dynamically
     cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
@@ -340,13 +371,14 @@ SCRIPT_EOF
     ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
     # CRITICAL: Enable networking service for network connectivity
     ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
+    # Note: chronyd is enabled at runtime by system-bootstrap after chrony package is installed
     # Enable storage-init service to run before system-bootstrap
     ln -sf /etc/init.d/storage-init "${NODE_NAME}-apkovl/etc/runlevels/default/storage-init"
     # Enable ssh-persist service to run after storage-init (idempotent SSH on every boot)
     ln -sf /etc/init.d/ssh-persist "${NODE_NAME}-apkovl/etc/runlevels/default/ssh-persist"
     # Enable k3s-bootstrap service to run after storage-init
     ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
-    
+
     # Note: QEMU test device setup moved to test-alpine-diskless-boot.sh
     
     # Create k3s-bootstrap OpenRC service
@@ -361,8 +393,9 @@ command_background=false
 pidfile="/run/${RC_SVCNAME}.pid"
 
 depend() {
-    need system-bootstrap
-    after system-bootstrap
+    need system-bootstrap net
+    after system-bootstrap net chronyd
+    use dns
     provide k3s-bootstrap
 }
 
@@ -665,8 +698,8 @@ start() {
         einfo "Storage is writable"
     fi
 
-    # Create directories for k3s, APK cache, LBU config, and usr/local/bin
-    mkdir -p /mnt/data/k3s /mnt/data/etc-persistent /mnt/data/var-lib-k3s /mnt/data/apk-cache /mnt/data/etc-lbu /mnt/data/usr-local-bin
+    # Create directories for k3s, APK cache, LBU config, usr/local/bin, and chrony
+    mkdir -p /mnt/data/k3s /mnt/data/etc-persistent /mnt/data/var-lib-k3s /mnt/data/apk-cache /mnt/data/etc-lbu /mnt/data/usr-local-bin /mnt/data/var-lib-chrony
 
     # Set up APK local cache (Alpine's official mechanism)
     # This enables packages to be cached and restored across reboots
@@ -701,6 +734,19 @@ start() {
         fi
         mount --bind /mnt/data/usr-local-bin /usr/local/bin
         eend $? "/usr/local/bin mount"
+    fi
+
+    # Set up chrony drift file on persistent storage
+    mkdir -p /mnt/data/var-lib-chrony
+    if ! mountpoint -q /var/lib/chrony 2>/dev/null; then
+        einfo "Setting up /var/lib/chrony on persistent storage"
+        mkdir -p /var/lib/chrony
+        # Copy any existing drift data
+        if [ -f /var/lib/chrony/chrony.drift ] && [ ! -f /mnt/data/var-lib-chrony/chrony.drift ]; then
+            cp -a /var/lib/chrony/chrony.drift /mnt/data/var-lib-chrony/
+        fi
+        mount --bind /mnt/data/var-lib-chrony /var/lib/chrony
+        eend $? "/var/lib/chrony mount"
     fi
 
     # Set up k3s config bind mount to persistent storage

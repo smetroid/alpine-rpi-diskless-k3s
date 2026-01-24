@@ -344,6 +344,7 @@ rc-update add urandom boot
 rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
+rc-update add chronyd default
 
 # NOTE: SSH setup is handled by the ssh-persist service (runs on every boot)
 # This ensures SSH persists across reboots without depending on LBU backup/restore
@@ -514,8 +515,9 @@ description="k3s cluster bootstrap service"
 name="k3s bootstrap"
 
 depend() {
-    need system-bootstrap
-    after system-bootstrap
+    need system-bootstrap net
+    after system-bootstrap net chronyd
+    use dns
     provide k3s-bootstrap
 }
 
