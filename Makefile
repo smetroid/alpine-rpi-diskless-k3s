@@ -21,7 +21,7 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean setup-sd create-image update-image test test-boot test-logging \
+.PHONY: help build validate clean setup-sd test test-boot test-logging \
         test-server test-worker test-cluster-status test-cluster-stop
 
 # Default target
@@ -33,12 +33,9 @@ help:
 	@echo "  make validate           Validate YAML configuration"
 	@echo "  make clean              Remove all build artifacts"
 	@echo ""
-	@echo "Disk/Image Targets:"
+	@echo "Disk Targets:"
 	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
 	@echo "                          Setup SD card for a specific node"
-	@echo "  make create-image       Create bootable qcow2 image for testing"
-	@echo "  make update-image NODE=k3s-21"
-	@echo "                          Update qcow2 image with node's apkovl"
 	@echo ""
 	@echo "Test Targets (Single Node):"
 	@echo "  make test               Run single-node diskless boot simulation"
@@ -54,15 +51,12 @@ help:
 	@echo ""
 	@echo "Configuration:"
 	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
-	@echo "  NODE=<name>             Node name for SD/image operations (default: k3s-21)"
+	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-21)"
 	@echo "  DEVICE=<path>           Block device for SD card setup"
-	@echo "  IMAGE_SIZE=<gb>         qcow2 image size in GB (default: 8)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build CONFIG=my-cluster.yaml"
 	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
-	@echo "  make update-image NODE=k3s-22"
-	@echo "  IMAGE_SIZE=16 make create-image"
 
 # =============================================================================
 # Build Targets
@@ -92,7 +86,7 @@ build-archives:
 	./$(SCRIPTS_DIR)/create-apkovl-archives.sh $(CONFIG)
 
 # =============================================================================
-# Disk/Image Targets
+# Disk Targets
 # =============================================================================
 
 # Setup SD card - requires DEVICE variable
@@ -102,17 +96,7 @@ ifndef DEVICE
 endif
 	@echo "Setting up SD card on $(DEVICE) for node $(NODE)..."
 	@echo "WARNING: This will FORMAT $(DEVICE)!"
-	sudo ./$(SCRIPTS_DIR)/setup-bootable-device.sh $(DEVICE) $(CONFIG)
-
-# Create qcow2 image for QEMU testing
-create-image:
-	@echo "Creating qcow2 boot image..."
-	./$(SCRIPTS_DIR)/create-qcow2-image.sh $(CONFIG)
-
-# Update qcow2 image with specific node's apkovl
-update-image:
-	@echo "Updating qcow2 image with $(NODE).apkovl.tar.gz..."
-	./$(SCRIPTS_DIR)/update-qcow2-apkovl.sh $(BUILD_DIR)/$(NODE).apkovl.tar.gz
+	sudo ./$(SCRIPTS_DIR)/setup-bootable-device.sh $(DEVICE) $(CONFIG) $(NODE)
 
 # =============================================================================
 # Test Targets

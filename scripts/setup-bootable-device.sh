@@ -19,16 +19,21 @@ else
     log_success() { echo "[SUCCESS] $*"; }
 fi
 
-if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-    echo "Usage: $0 <sd_card_device> [config_file]"
+if [ $# -lt 1 ] || [ $# -gt 3 ]; then
+    echo "Usage: $0 <sd_card_device> [config_file] [node_name]"
     echo "Example: $0 /dev/sdb"
     echo "Example: $0 /dev/sdb my-cluster.yaml"
+    echo "Example: $0 /dev/sdb my-cluster.yaml k3s-21"
+    echo ""
+    echo "Alternatively, set NODE environment variable:"
+    echo "  NODE=k3s-21 $0 /dev/sdb my-cluster.yaml"
     log_warn "This will FORMAT the entire SD card!"
     exit 1
 fi
 
 SD_DEVICE=$1
 CONFIG_FILE="${CONFIG_FILE:-${2:-cluster-config.yaml}}"
+NODE="${NODE:-${3}}"
 
 # Load YAML parser if config file exists
 if [ -f "$CONFIG_FILE" ]; then
@@ -359,16 +364,53 @@ log_success "Boot configuration files created"
 log_success "Boot partition setup complete"
 log_success "Data partition created (will be formatted during Alpine boot)"
 
+# Copy apkovl file if NODE is specified
+if [ -n "$NODE" ]; then
+    log_info "Copying apkovl file for node: $NODE"
+
+    # Build directory where apkovl files are stored
+    BUILD_DIR="${BUILD_DIR:-$(cd "$SCRIPT_DIR/../builds" && pwd)}"
+    APOKVL_FILE="${BUILD_DIR}/${NODE}.apkovl.tar.gz"
+
+    if [ -f "$APOKVL_FILE" ]; then
+        log_info "Found apkovl file: $APOKVL_FILE"
+        if sudo cp "$APOKVL_FILE" "${MOUNT_BOOT}/${NODE}.apkovl.tar.gz"; then
+            log_success "Copied ${NODE}.apkovl.tar.gz to boot partition"
+        else
+            log_error "Failed to copy apkovl file to boot partition"
+            exit 1
+        fi
+    else
+        log_error "Apkovl file not found: $APOKVL_FILE"
+        log_info "Available apkovl files in $BUILD_DIR:"
+        ls -la "${BUILD_DIR}"/*.apkovl.tar.gz 2>/dev/null || echo "  No apkovl files found"
+        log_warn "Please run 'make build' first to generate apkovl files"
+        exit 1
+    fi
+else
+    log_warn "No NODE specified - apkovl file not copied"
+    log_info "To copy apkovl automatically, set NODE environment variable or pass as 3rd argument"
+fi
+
 log_success "Setup complete!"
 echo ""
 log_info "Next steps:"
-echo "1. Copy the appropriate .apkovl.tar.gz file to the boot partition"
-echo "2. Insert bootable device into Raspberry Pi and boot"
-echo "3. The system will automatically:"
-echo "   - Format the data partition to ext4"
-echo "   - Mount persistent storage"
-echo "   - Install and configure k3s"
-echo "   - Join the k3s cluster"
+if [ -n "$NODE" ]; then
+    echo "1. Insert bootable device into Raspberry Pi and boot"
+    echo "2. The system will automatically:"
+    echo "   - Format the data partition to ext4"
+    echo "   - Mount persistent storage"
+    echo "   - Install and configure k3s"
+    echo "   - Join the k3s cluster as node: $NODE"
+else
+    echo "1. Copy the appropriate .apkovl.tar.gz file to the boot partition"
+    echo "2. Insert bootable device into Raspberry Pi and boot"
+    echo "3. The system will automatically:"
+    echo "   - Format the data partition to ext4"
+    echo "   - Mount persistent storage"
+    echo "   - Install and configure k3s"
+    echo "   - Join the k3s cluster"
+fi
 echo ""
 
 # Unmount all partitions

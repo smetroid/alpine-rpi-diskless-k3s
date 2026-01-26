@@ -373,6 +373,102 @@ get_k3s_service_cidr() { yaml_get "k3s.service_cidr"; }
 get_alpine_packages() { yaml_get_array "alpine.packages"; }
 get_alpine_timezone() { yaml_get "alpine.timezone"; }
 
+# Datastore functions (3-level nesting: k3s.datastore.*)
+# Use grep/sed to extract nested values under k3s.datastore
+_get_datastore_value() {
+    local field="$1"
+    local file="${CONFIG_FILE}"
+
+    # Find the k3s.datastore section and extract the field value
+    # This handles the 3-level nesting that yaml_get doesn't support
+    awk '
+    # State machine to track position in YAML
+    BEGIN {
+        in_k3s = 0
+        in_datastore = 0
+        found = 0
+    }
+
+    # Skip comments and empty lines
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+
+    # Track k3s: section
+    /^[[:space:]]*k3s:[[:space:]]*$/ {
+        in_k3s = 1
+        in_datastore = 0
+        next
+    }
+
+    # When we see another top-level section, we are no longer in k3s
+    /^[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$/ && !/^[[:space:]]*k3s:/ {
+        in_k3s = 0
+        in_datastore = 0
+    }
+
+    # Track datastore: section (within k3s)
+    in_k3s && /^[[:space:]]*datastore:[[:space:]]*$/ {
+        in_datastore = 1
+        next
+    }
+
+    # Within datastore section, look for our field
+    in_datastore && /^[[:space:]]+'"${field}"':[[:space:]]*/ {
+        # Extract value after the colon
+        match($0, /:[[:space:]]*/)
+        value = substr($0, RSTART + RLENGTH)
+
+        # Remove inline comments
+        gsub(/#.*/, "", value)
+
+        # Remove leading/trailing whitespace
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+
+        # Remove quotes from quoted values
+        if (value ~ /^".*"$/) {
+            gsub(/^"/, "", value)
+            gsub(/"$/, "", value)
+        }
+
+        print value
+        found = 1
+        exit
+    }
+
+    END { exit (found == 0 ? 1 : 0) }
+    ' "$file"
+}
+
+get_datastore_type() { _get_datastore_value "type"; }
+get_datastore_host() { _get_datastore_value "host"; }
+get_datastore_port() { _get_datastore_value "port"; }
+get_datastore_database() { _get_datastore_value "database"; }
+get_datastore_user() { _get_datastore_value "user"; }
+get_datastore_password() { _get_datastore_value "password"; }
+get_datastore_sslmode() { _get_datastore_value "sslmode"; }
+
+get_datastore_endpoint() {
+    local type=$(_get_datastore_value "type")
+    if [ -z "$type" ]; then
+        return 1
+    fi
+
+    local host=$(_get_datastore_value "host")
+    local port=$(_get_datastore_value "port" || echo "5432")
+    local database=$(_get_datastore_value "database")
+    local user=$(_get_datastore_value "user")
+    local password=$(_get_datastore_value "password")
+    local sslmode=$(_get_datastore_value "sslmode" || echo "disable")
+
+    if [ "$type" = "postgres" ]; then
+        echo "postgres://${user}:${password}@${host}:${port}/${database}?sslmode=${sslmode}"
+    elif [ "$type" = "mysql" ]; then
+        echo "mysql://${user}:${password}@tcp(${host}:${port})/${database}"
+    else
+        return 1
+    fi
+}
+
 # Validation functions
 validate_config() {
     local errors=0

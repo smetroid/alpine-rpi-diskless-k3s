@@ -4,6 +4,10 @@
 
 set -e
 
+# Source and library directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
+
 # Load YAML parser
 source "$LIB_DIR/yaml-parser.sh"
 

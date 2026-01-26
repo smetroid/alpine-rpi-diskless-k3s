@@ -4,6 +4,10 @@
 
 set -e
 
+# Source and library directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
+
 # Use config file from environment if available
 CONFIG_FILE="${CONFIG_FILE:-cluster-config.yaml}"
 export CONFIG_FILE
@@ -35,6 +39,14 @@ SERVICE_CIDR=$(get_k3s_service_cidr)
 FLANNEL_BACKEND=$(yaml_get "k3s.flannel_backend")
 DISABLE_SERVICES=($(yaml_get_array "k3s.disable_services"))
 
+# Get external datastore configuration (optional)
+DATASTORE_ENDPOINT=""
+if get_datastore_endpoint; then
+    DATASTORE_ENDPOINT=$(get_datastore_endpoint)
+    DATASTORE_TYPE=$(get_datastore_type)
+    echo "Using external datastore (${DATASTORE_TYPE}): $(yaml_get "k3s.datastore.host")"
+fi
+
 # Process each node
 yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Setting up K3s configuration for $NODE_NAME ($NODE_ROLE)..."
@@ -44,7 +56,24 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     
     if [ "$NODE_ROLE" = "master" ]; then
         # Master node configuration
-        cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
+        # When using external datastore (PostgreSQL/MySQL), do NOT use cluster-init
+        # All servers coordinate via the external datastore instead
+        if [ -n "$DATASTORE_ENDPOINT" ]; then
+            # HA with external datastore
+            cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
+write-kubeconfig-mode: "0644"
+bind-address: 0.0.0.0
+advertise-address: $NODE_IP
+node-ip: $NODE_IP
+cluster-cidr: "$CLUSTER_CIDR"
+service-cidr: "$SERVICE_CIDR"
+flannel-backend: "$FLANNEL_BACKEND"
+datastore-endpoint: "$DATASTORE_ENDPOINT"
+EOF
+            echo "# HA mode: External datastore enabled"
+        else
+            # Embedded database (SQLite) with cluster-init
+            cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
 write-kubeconfig-mode: "0644"
 cluster-init: true
 bind-address: 0.0.0.0
@@ -54,6 +83,8 @@ cluster-cidr: "$CLUSTER_CIDR"
 service-cidr: "$SERVICE_CIDR"
 flannel-backend: "$FLANNEL_BACKEND"
 EOF
+            echo "# HA mode: Embedded database with cluster-init"
+        fi
 
         # Add disable services
         if [ ${#DISABLE_SERVICES[@]} -gt 0 ]; then
@@ -108,11 +139,25 @@ EOF
 
     else
         # Find master node IP for agent configuration
+        # In HA mode with external datastore, consider using a VIP or load balancer
         MASTER_IP=$(yaml_get_nodes | grep ":master" | head -1 | cut -d':' -f2)
-        
+
+        # Check if a HA load balancer VIP is configured
+        LB_VIP=$(yaml_get "k3s.loadbalancer_vip" 2>/dev/null || echo "")
+        if [ -n "$LB_VIP" ]; then
+            SERVER_URL="https://$LB_VIP:6443"
+            echo "# Worker using load balancer VIP: $LB_VIP"
+        else
+            SERVER_URL="https://$MASTER_IP:6443"
+            echo "# Worker using master IP: $MASTER_IP"
+            if [ -n "$DATASTORE_ENDPOINT" ]; then
+                echo "# WARNING: For true HA, configure k3s.loadbalancer_vip or use multiple server URLs"
+            fi
+        fi
+
         # Agent node configuration
         cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
-server: https://$MASTER_IP:6443
+server: $SERVER_URL
 node-ip: $NODE_IP
 EOF
 

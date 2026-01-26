@@ -24,7 +24,7 @@ alpine-rpi-diskless/
 │   ├── setup-k3s-yaml.sh     # Configures k3s settings
 │   ├── generate-manifests-yaml.sh # Generates Kubernetes manifests
 │   ├── create-apkovl-archives.sh # Creates final .apkovl.tar.gz files
-│   ├── setup-sd-card.sh       # SD card preparation
+│   ├── setup-bootable-device.sh # SD card preparation
 │   └── validate-config.sh     # Configuration validation
 ├── lib/
 │   └── yaml-parser.sh         # YAML parsing library
@@ -46,11 +46,18 @@ alpine-rpi-diskless/
 
 ### Build and Validation
 ```bash
-# Validate YAML configuration
-./validate-config.sh [config-file.yaml]
+# Using make (recommended)
+make build              # Build from default config (k3s.yaml)
+make validate           # Validate default config
+make clean              # Clean build artifacts
 
-# Build complete cluster setup from YAML
-./build-from-yaml.sh [config-file.yaml]
+# With custom config
+make build CONFIG=my-cluster.yaml
+make validate CONFIG=my-cluster.yaml
+
+# Or run scripts directly
+./scripts/build-from-yaml.sh [config-file.yaml]
+./scripts/validate-config.sh [config-file.yaml]
 
 # Individual build steps (if needed)
 ./scripts/create-apkovl-yaml.sh [config-file.yaml]
@@ -61,20 +68,17 @@ alpine-rpi-diskless/
 
 ### SD Card Preparation
 ```bash
-# Linux
-sudo ./setup-sd-card.sh /dev/sdX [config-file.yaml]
+# Using make (recommended)
+make setup-sd DEVICE=/dev/sdX NODE=k3s-21
 
-# macOS
-sudo ./setup-sd-card.sh /dev/diskN [config-file.yaml]
+# Or directly
+sudo ./scripts/setup-bootable-device.sh /dev/sdX [config-file.yaml] [node-name]
 ```
 
 ### Testing and Simulation
 ```bash
 # Test Alpine diskless boot process
 ./test/test-alpine-diskless-boot.sh
-
-# Test automatic network detection
-./test/test-auto-network.sh
 ```
 
 ### Configuration Management
@@ -83,8 +87,8 @@ sudo ./setup-sd-card.sh /dev/diskN [config-file.yaml]
 cp cluster-config.yaml.example my-cluster.yaml
 
 # Multiple environments
-./build-from-yaml.sh dev-cluster.yaml
-./build-from-yaml.sh prod-cluster.yaml
+make build CONFIG=dev-cluster.yaml
+make build CONFIG=prod-cluster.yaml
 ```
 
 ## Key Files and Their Purposes
@@ -103,16 +107,15 @@ cp cluster-config.yaml.example my-cluster.yaml
 ### Critical Scripts
 - `scripts/build-from-yaml.sh`: Main orchestrator that calls all other scripts
 - `lib/yaml-parser.sh`: YAML parsing functions used by all scripts
-- Root-level wrapper scripts (`build-from-yaml.sh`, `validate-config.sh`, etc.)
 
 ## Development Guidelines
 
 ### Script Modification Rules
-**CRITICAL**: When modifying functionality, always edit scripts in the `scripts/` directory, not the root-level wrapper scripts. The wrapper scripts just call the actual implementation in `scripts/`.
+**CRITICAL**: All scripts are located in the `scripts/` directory. Always edit scripts directly in that directory.
 
-- Root-level scripts (`build-from-yaml.sh`, `validate-config.sh`) are wrappers
-- Actual implementation is in `scripts/` directory
-- Always modify `scripts/build-from-yaml.sh` or `scripts/create-apkovl-yaml.sh` for functionality changes
+- Main build logic: `scripts/build-from-yaml.sh`
+- Individual component scripts: `scripts/create-apkovl-yaml.sh`, `scripts/setup-k3s-yaml.sh`, etc.
+- Use `make build` or call `scripts/build-from-yaml.sh` directly to run builds
 
 ### YAML Configuration
 The system uses a custom YAML parser (`lib/yaml-parser.sh`) that supports:
@@ -143,14 +146,14 @@ The system uses Alpine's LBU (Local Backup Utility) combined with SD card persis
 
 ### Adding New Node Configuration
 1. Edit the YAML configuration file to add new nodes
-2. Run `./validate-config.sh` to check configuration
-3. Run `./build-from-yaml.sh` to generate new overlays
-4. Deploy to SD cards using `./setup-sd-card.sh`
+2. Run `make validate CONFIG=my-cluster.yaml` to check configuration
+3. Run `make build CONFIG=my-cluster.yaml` to generate new overlays
+4. Deploy to SD cards using `make setup-sd DEVICE=/dev/sdX NODE=k3s-21`
 
 ### Modifying k3s Configuration
 1. Edit YAML configuration (k3s section)
 2. Modify `scripts/setup-k3s-yaml.sh` if new k3s features needed
-3. Test with `./build-from-yaml.sh`
+3. Test with `make build`
 
 ### Adding New Services
 1. Add service configuration to YAML schema

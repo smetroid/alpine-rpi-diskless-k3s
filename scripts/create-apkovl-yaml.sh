@@ -5,6 +5,140 @@
 
 set -e
 
+# Source and library directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
+
+# Temporary directory for e2fsprogs packages
+E2FSPROGS_CACHE_DIR="/tmp/e2fsprogs-cache"
+
+# Function to discover package version from APKINDEX
+# Returns the version string for the given package name
+discover_package_version() {
+    local package_name="$1"
+    local apkindex_dir="$2"
+
+    # The APKINDEX file has format: C:package_name\nV:version\nA:architecture...
+    # We need to find the package and extract its version
+    awk -v pkg="$package_name" '
+        BEGIN { found=0 }
+        /^C:/ {
+            if ($0 == "C:" pkg) {
+                found=1
+            } else {
+                found=0
+            }
+        }
+        /^V:/ && found {
+            print substr($0, 3)
+            found=0
+            exit
+        }
+    ' "$apkindex_dir/APKINDEX"
+}
+
+# Function to download and extract e2fsprogs binaries and libraries
+# These are needed for mkfs.ext4 during storage-init service (before apk packages are installed)
+prepare_e2fsprogs() {
+    local alpine_version=$(yaml_get "alpine.version" || echo "3.22")
+    local alpine_major=$(echo "$alpine_version" | cut -d'.' -f1-2)
+    local arch=$(yaml_get "alpine.architecture" || echo "aarch64")
+    local base_url="http://dl-cdn.alpinelinux.org/alpine/v${alpine_major}/main/${arch}"
+
+    if [ -d "$E2FSPROGS_CACHE_DIR" ]; then
+        echo "Using cached e2fsprogs packages..."
+        return 0
+    fi
+
+    echo "Discovering e2fsprogs version for Alpine ${alpine_major} (${arch})..."
+    mkdir -p "$E2FSPROGS_CACHE_DIR"
+
+    # Download and extract APKINDEX to find the correct package version
+    local index_file="${E2FSPROGS_CACHE_DIR}/APKINDEX.tar.gz"
+    if ! curl -sL "${base_url}/APKINDEX.tar.gz" -o "$index_file"; then
+        echo "Warning: Failed to download APKINDEX from ${base_url}"
+        rm -rf "$E2FSPROGS_CACHE_DIR"
+        return 1
+    fi
+
+    # Extract APKINDEX
+    tar -xzf "$index_file" -C "$E2FSPROGS_CACHE_DIR"
+
+    # Discover e2fsprogs version
+    local e2fsprogs_ver=$(discover_package_version "e2fsprogs" "$E2FSPROGS_CACHE_DIR")
+    if [ -z "$e2fsprogs_ver" ]; then
+        echo "Warning: Could not discover e2fsprogs version from APKINDEX"
+        rm -rf "$E2FSPROGS_CACHE_DIR"
+        return 1
+    fi
+
+    echo "Found e2fsprogs version: ${e2fsprogs_ver}"
+
+    # Download packages using discovered version
+    echo "Downloading e2fsprogs packages for $arch..."
+    if ! curl -sL "${base_url}/e2fsprogs-${e2fsprogs_ver}.apk" -o "${E2FSPROGS_CACHE_DIR}/e2fsprogs.apk"; then
+        echo "Warning: Failed to download e2fsprogs package"
+        rm -rf "$E2FSPROGS_CACHE_DIR"
+        return 1
+    fi
+
+    if ! curl -sL "${base_url}/e2fsprogs-libs-${e2fsprogs_ver}.apk" -o "${E2FSPROGS_CACHE_DIR}/e2fsprogs-libs.apk"; then
+        echo "Warning: Failed to download e2fsprogs-libs package"
+        rm -rf "$E2FSPROGS_CACHE_DIR"
+        return 1
+    fi
+
+    # Extract packages
+    tar -xzf "${E2FSPROGS_CACHE_DIR}/e2fsprogs.apk" -C "${E2FSPROGS_CACHE_DIR}"
+    tar -xzf "${E2FSPROGS_CACHE_DIR}/e2fsprogs-libs.apk" -C "${E2FSPROGS_CACHE_DIR}"
+
+    echo "e2fsprogs packages downloaded and extracted"
+}
+
+# Function to copy e2fsprogs binaries and libraries to apkovl
+add_e2fsprogs_to_apkovl() {
+    local apkovl_dir="$1"
+
+    if [ ! -d "$E2FSPROGS_CACHE_DIR" ]; then
+        echo "Warning: e2fsprogs cache not found, skipping"
+        return 0
+    fi
+
+    # Create target directories
+    mkdir -p "${apkovl_dir}/sbin"
+    mkdir -p "${apkovl_dir}/usr/lib"
+
+    # Copy binaries (mke2fs is the main binary, mkfs.ext4 is a symlink)
+    cp -p "${E2FSPROGS_CACHE_DIR}/sbin/mke2fs" "${apkovl_dir}/sbin/"
+    cp -p "${E2FSPROGS_CACHE_DIR}/sbin/e2fsck" "${apkovl_dir}/sbin/"
+
+    # Create symlinks for mkfs.ext4, mkfs.ext2, mkfs.ext3
+    cd "${apkovl_dir}/sbin"
+    ln -sf mke2fs mkfs.ext2
+    ln -sf mke2fs mkfs.ext3
+    ln -sf mke2fs mkfs.ext4
+
+    # Create symlinks for fsck variants
+    ln -sf e2fsck fsck.ext2
+    ln -sf e2fsck fsck.ext3
+    ln -sf e2fsck fsck.ext4
+    cd - > /dev/null
+
+    # Copy libraries
+    cp -p "${E2FSPROGS_CACHE_DIR}/usr/lib/libext2fs.so.2.4" "${apkovl_dir}/usr/lib/"
+    cp -p "${E2FSPROGS_CACHE_DIR}/usr/lib/libe2p.so.2.3" "${apkovl_dir}/usr/lib/"
+    cp -p "${E2FSPROGS_CACHE_DIR}/usr/lib/libss.so.2.0" "${apkovl_dir}/usr/lib/"
+
+    # Create soname symlinks for library loading
+    cd "${apkovl_dir}/usr/lib"
+    ln -sf libext2fs.so.2.4 libext2fs.so.2
+    ln -sf libe2p.so.2.3 libe2p.so.2
+    ln -sf libss.so.2.0 libss.so.2
+    cd - > /dev/null
+
+    echo "Added e2fsprogs binaries and libraries to apkovl"
+}
+
 # Use the config file from environment, or from parameter, or default
 CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
@@ -44,13 +178,20 @@ echo "Gateway: $GATEWAY"
 echo "DNS: ${DNS_SERVERS[*]}"
 echo ""
 
+# Prepare e2fsprogs binaries and libraries for mkfs.ext4 during boot
+echo "Preparing e2fsprogs for boot-time filesystem creation..."
+prepare_e2fsprogs || echo "Warning: e2fsprogs preparation failed, mkfs.ext4 may not be available during boot"
+
 # Process each node
 yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE..."
     
     # Create directory structure
     mkdir -p "${NODE_NAME}-apkovl"/{etc/{network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
-    
+
+    # Add e2fsprogs binaries and libraries (mkfs.ext4 needed during boot)
+    add_e2fsprogs_to_apkovl "${NODE_NAME}-apkovl"
+
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
 
@@ -470,6 +611,9 @@ depend() {
 
 start() {
     ebegin "Setting up persistent storage"
+
+    # Ensure ext4 module is loaded (needed for mkfs.ext4 and mount)
+    modprobe ext4 2>/dev/null || true
 
     # Auto-detect storage device - supports SD card, USB, and virtio
     einfo "Auto-detecting storage device..."

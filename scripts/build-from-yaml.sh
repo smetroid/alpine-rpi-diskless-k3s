@@ -4,7 +4,19 @@
 
 set -e
 
+# Source directory and library directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+
+# Build directory (default: builds)
+BUILD_DIR="${BUILD_DIR:-builds}"
+
+# Get absolute path to config file before changing directories
 CONFIG_FILE="${1}"
+if [ -n "$CONFIG_FILE" ]; then
+    # Convert to absolute path
+    CONFIG_FILE="$(cd "$(dirname "$CONFIG_FILE")" 2>/dev/null && pwd)/$(basename "$CONFIG_FILE")"
+fi
 
 echo "=== Alpine Diskless k3s YAML Setup Builder ==="
 echo "Using configuration: $CONFIG_FILE"
@@ -14,7 +26,8 @@ echo ""
 # Export config file for all scripts
 export CONFIG_FILE
 
-# Change to build directory for output
+# Create and change to build directory for output
+mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # Validate configuration first
@@ -236,8 +249,8 @@ description="Alpine diskless system initialization service"
 name="system bootstrap"
 
 depend() {
-    need localmount storage-init ssh-persist
-    after localmount storage-init ssh-persist
+    need localmount storage-init ssh-persist net
+    after localmount storage-init ssh-persist net
     before k3s-bootstrap
     provide system-bootstrap
 }
