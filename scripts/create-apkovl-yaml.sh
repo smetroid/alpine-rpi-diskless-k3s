@@ -22,8 +22,8 @@ discover_package_version() {
     # We need to find the package and extract its version
     awk -v pkg="$package_name" '
         BEGIN { found=0 }
-        /^C:/ {
-            if ($0 == "C:" pkg) {
+        /^P:/ {
+            if ($0 == "P:" pkg) {
                 found=1
             } else {
                 found=0
