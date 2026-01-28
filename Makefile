@@ -23,7 +23,7 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-logging \
+.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod test-logging \
         test-server test-worker test-cluster-status test-cluster-stop \
         build-test test-qemu list-apkovl list-apkovl-prod list-apkovl-test show-config
 
@@ -47,10 +47,11 @@ help:
 	@echo "                          Setup SD card for a specific node"
 	@echo ""
 	@echo "Test Targets (Single Node):"
-	@echo "  make test               Run single-node diskless boot simulation"
-	@echo "  make test-boot          Alias for 'make test'"
+	@echo "  make test               Run QEMU boot test with qemu.yaml"
+	@echo "  make test-boot          Same as 'make test'"
+	@echo "  make test-qemu          Build + boot with qemu.yaml"
+	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
 	@echo "  make test-logging       Run logging tests"
-	@echo "  make test-qemu          Full QEMU test workflow (build + boot)"
 	@echo ""
 	@echo "Test Targets (Multi-Node Cluster):"
 	@echo "  make test-server        Start k3s server VM (run first, in terminal 1)"
@@ -122,14 +123,20 @@ endif
 # Run full diskless boot simulation with QEMU
 test: test-boot
 
+# Boot test - uses qemu.yaml by default for QEMU testing
+test-boot:
+	@echo "Running Alpine diskless boot simulation with qemu.yaml..."
+	./$(TEST_DIR)/test-alpine-diskless-boot.sh qemu.yaml
+
 # Full QEMU test workflow - build and boot test config
 test-qemu: build-test
 	@echo "Running QEMU test boot..."
 	./$(TEST_DIR)/test-alpine-diskless-boot.sh qemu.yaml
 
-test-boot:
-	@echo "Running Alpine diskless boot simulation..."
-	./$(TEST_DIR)/test-alpine-diskless-boot.sh
+# Boot test with production config (for RPi hardware testing)
+test-prod:
+	@echo "Running Alpine diskless boot simulation with k3s.yaml..."
+	./$(TEST_DIR)/test-alpine-diskless-boot.sh k3s.yaml
 
 # Run logging tests
 test-logging:
