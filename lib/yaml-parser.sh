@@ -73,77 +73,69 @@ yaml_get() {
 }
 
 # Function to get array values from YAML
+# Returns newline-separated list of values
+# For arrays of objects with 'name:' field, extracts the name value
 yaml_get_array() {
     local key="$1"
     local file="${2:-$CONFIG_FILE}"
-    
+
     if [ ! -f "$file" ]; then
         echo "Error: Configuration file $file not found" >&2
         return 1
     fi
-    
+
     # Handle nested keys
     local prefix=""
     local search_key="$key"
-    
+
     if [[ "$key" == *.* ]]; then
         prefix=$(echo "$key" | cut -d. -f1)
         search_key=$(echo "$key" | cut -d. -f2-)
     fi
-    
-    awk -v prefix="$prefix" -v key="$search_key" '
-    BEGIN { 
-        in_section = (prefix == "")
-        in_array = 0
-    }
-    
-    # Skip comments and empty lines
-    /^[[:space:]]*#/ { next }
-    /^[[:space:]]*$/ { next }
-    
-    # Section headers
-    /^[a-zA-Z_][a-zA-Z0-9_]*:/ {
-        current_section = $1
-        gsub(/:$/, "", current_section)
-        in_section = (prefix == "" || current_section == prefix)
-        in_array = 0
-        next
-    }
-    
-    # Array key
-    in_section && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:/ {
-        gsub(/^[[:space:]]+/, "")
-        split($0, parts, ":")
-        yaml_key = parts[1]
-        
-        if (yaml_key == key) {
-            in_array = 1
-        } else {
-            in_array = 0
-        }
-        next
-    }
-    
-    # Array items
-    in_array && /^[[:space:]]*-/ {
+
+    # Use sed to extract the array, then awk to process items
+    # First extract the section containing the array
+    sed -n '/^'${key}':/,/^[a-zA-Z]/p' "$file" | awk -v key="$key" '
+    BEGIN { in_array = 0 }
+
+    /^'${key}':/ { in_array = 1; next }
+
+    # Exit at next section
+    /^[a-zA-Z_][a-zA-Z0-9_]*:/ && !/^'${key}':/ { exit }
+
+    # Process array items
+    in_array && /^-[[:space:]]/ {
+        # Remove leading dash and whitespace
         gsub(/^[[:space:]]*-[[:space:]]*/, "")
-        # Handle quoted values with potential inline comments
-        if (match($0, /^"[^"]*"/)) {
-            # Extract just the content between quotes
-            $0 = substr($0, 2, RLENGTH - 2)
-        } else {
-            # Unquoted value - strip inline comments
-            gsub(/#.*$/, "")
+
+        # Check if this is a name field
+        if (/^name:[[:space:]]*/) {
+            # Extract name value
+            sub(/^name:[[:space:]]*/, "")
+            # Remove quotes
+            gsub(/^"/, "")
+            gsub(/"$/, "")
+            # Remove inline comments
+            gsub(/#.*/, "")
+            # Remove surrounding whitespace
             gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            print $0
+        } else if (!/^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:/) {
+            # Simple value (not a key-value pair)
+            # Remove quotes
+            if (/^"/) {
+                gsub(/^"/, "")
+                gsub(/"$/, "")
+            }
+            # Remove inline comments
+            gsub(/#.*$/, "")
+            # Remove surrounding whitespace
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if (length($0) > 0) print $0
         }
-        if (length($0) > 0) print $0
+        next
     }
-    
-    # Stop array on next key
-    in_array && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:/ {
-        in_array = 0
-    }
-    ' "$file"
+    '
 }
 
 # Function to get all nodes
