@@ -8,11 +8,13 @@
 
 # Configuration
 CONFIG ?= k3s.yaml
-BUILD_DIR := builds
 SCRIPTS_DIR := scripts
 TEST_DIR := test
 
 # Export CONFIG_FILE for scripts (they check env var before arguments)
+# Build directory is auto-detected by scripts based on config basename:
+#   - builds/         for k3s.yaml, cluster-*.yaml
+#   - builds-qemu/    for qemu.yaml, *-test.yaml, *-qemu.yaml
 export CONFIG_FILE := $(CONFIG)
 
 # Default node (first node in config)
@@ -23,7 +25,7 @@ UNAME := $(shell uname)
 
 .PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-logging \
         test-server test-worker test-cluster-status test-cluster-stop \
-        build-test test-qemu
+        build-test test-qemu list-apkovl list-apkovl-prod list-apkovl-test show-config
 
 # Default target
 help:
@@ -36,6 +38,9 @@ help:
 	@echo "  make clean              Remove production build artifacts"
 	@echo "  make clean-test         Remove test build artifacts"
 	@echo "  make clean-all          Remove all artifacts (production + test)"
+	@echo "  make list-apkovl        List all apkovl archives (both)"
+	@echo "  make list-apkovl-prod   List production apkovl archives"
+	@echo "  make list-apkovl-test   List test apkovl archives"
 	@echo ""
 	@echo "Disk Targets:"
 	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
@@ -179,8 +184,8 @@ clean-test:
 # Deep clean - also removes qcow2 images and test artifacts
 clean-all: clean clean-test
 	@echo "Removing qcow2 images and test artifacts..."
-	rm -f $(BUILD_DIR)/*.qcow2
-	rm -f $(BUILD_DIR)/*.raw
+	rm -f builds/*.qcow2 builds/*.raw 2>/dev/null || true
+	rm -f builds-qemu/*.qcow2 builds-qemu/*.raw 2>/dev/null || true
 	rm -rf $(TEST_DIR)/vm-diskless
 	rm -rf $(TEST_DIR)/vm-multinode
 	rm -f $(TEST_DIR)/setup.log
@@ -195,13 +200,26 @@ show-config:
 	@echo "Current configuration:"
 	@echo "  CONFIG: $(CONFIG)"
 	@echo "  NODE: $(NODE)"
-	@echo "  BUILD_DIR: $(BUILD_DIR)"
+	@echo "  Build directory: auto-detected from config basename"
 	@cat $(CONFIG)
 
-# List available apkovl archives
+# List available apkovl archives (both production and test)
 list-apkovl:
-	@echo "Available apkovl archives:"
-	@ls -la $(BUILD_DIR)/*.apkovl.tar.gz 2>/dev/null || echo "  No archives found. Run 'make build' first."
+	@echo "Production apkovl archives (builds/):"
+	@ls -la builds/*.apkovl.tar.gz 2>/dev/null || echo "  No production archives found. Run 'make build' first."
+	@echo ""
+	@echo "Test apkovl archives (builds-qemu/):"
+	@ls -la builds-qemu/*.apkovl.tar.gz 2>/dev/null || echo "  No test archives found. Run 'make build-test' first."
+
+# List production apkovl archives only
+list-apkovl-prod:
+	@echo "Production apkovl archives (builds/):"
+	@ls -la builds/*.apkovl.tar.gz 2>/dev/null || echo "  No production archives found. Run 'make build' first."
+
+# List test apkovl archives only
+list-apkovl-test:
+	@echo "Test apkovl archives (builds-qemu/):"
+	@ls -la builds-qemu/*.apkovl.tar.gz 2>/dev/null || echo "  No test archives found. Run 'make build-test' first."
 
 # List nodes from config (requires yq or python)
 list-nodes:
