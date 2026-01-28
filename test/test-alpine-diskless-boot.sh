@@ -473,6 +473,7 @@ EOF
     # Enable the dynamic-network service in default runlevel
     ln -sf /etc/init.d/dynamic-network etc/runlevels/default/dynamic-network
 fi  # End of non-qemu.yaml DHCP modifications
+fi  # End of BUILD_DIR != builds-qemu check
 
 # Debug: Check what files exist before repacking
 log "Files in overlay before repacking:"
