@@ -1,0 +1,116 @@
+# Alpine Diskless k3s Cluster Configuration - QEMU Testing Environment
+# This config mirrors k3s.yaml but with QEMU-appropriate values
+
+cluster:
+  name: "alpine-k3s-test"
+  k3s_version: "1.33"
+  token: "" # Leave empty to auto-generate
+
+network:
+  domain: "local"
+  subnet: "10.0.2.0/24"
+  gateway: "10.0.2.2"
+  dns_servers:
+    - "10.0.2.3"
+
+  # MetalLB LoadBalancer IP range
+  loadbalancer_pool:
+    start: "10.0.2.70"
+    end: "10.0.2.80"
+
+nodes:
+  - name: "qemu-test-1"
+    ip: "10.0.2.15"
+    role: "master"
+    taints:
+      - "CriticalAddonsOnly=true:NoExecute"
+
+  - name: "qemu-test-2"
+    ip: "10.0.2.16"
+    role: "worker"
+
+k3s:
+  # Services to disable (k3s defaults: servicelb, traefik)
+  #disable_services:
+  #  - "servicelb"
+  #  - "traefik"
+
+  # External datastore for high availability (optional)
+  # When enabled, all masters share the same backend database
+  datastore:
+    type: "postgres"  # postgres, mysql
+    host: "10.0.2.3"
+    port: 5432
+    database: "k3s"
+    user: "k3s"
+    password: "CHANGE_ME"
+    # SSL mode: disable, require, verify-ca, verify-full
+    sslmode: "disable"
+
+  # Load balancer VIP for worker nodes (recommended for true HA)
+  # Workers connect to this VIP which distributes across all masters
+  loadbalancer_vip: "10.0.2.100"
+
+  # Cluster networking
+  cluster_cidr: "10.42.0.0/16"
+  service_cidr: "10.43.0.0/16"
+  flannel_backend: "vxlan"
+
+#services:
+#  metallb:
+#    enabled: true
+#    version: "v0.13.12"
+#
+#  nginx_ingress:
+#    enabled: true
+#    version: "v1.8.4"
+#    replicas: 2
+
+alpine:
+  version: "3.22.1"
+  architecture: "x86_64"
+  timezone: "America/Denver"
+
+  # Additional packages to install
+  packages:
+    - "curl"
+    - "ca-certificates"
+    - "iptables"
+    - "ip6tables"
+    - "util-linux"
+    - "coreutils"
+    - "findutils"
+    - "netcat-openbsd"
+    - "cgroup-tools"
+    - "parted"
+    - "e2fsprogs"
+    - "chrony"  # NTP time synchronization (required for SSL/TLS)
+
+storage:
+  # USB drive device (will be set per deployment)
+  device: "/dev/sda"
+
+  # Partition sizes
+  boot_partition_size: "512MiB"
+
+  # Mount points
+  data_mount: "/mnt/data"
+  persistent_paths:
+    - "/etc/k3s"
+    - "/var/lib/k3s"
+
+ssh:
+  port: 22
+  permit_root_login: true
+  password_authentication: true
+
+  # SSH public keys (add your keys here)
+  authorized_keys:
+    - "ssh-ed25519 REDACTED_SSH_KEY_1 you@example.com"
+    - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
+
+# Overlay packages - packages to include in apkovl for early boot
+# Architecture-specific packages will be downloaded automatically
+overlay_packages:
+  - name: "openssh"
+  - name: "e2fsprogs"
