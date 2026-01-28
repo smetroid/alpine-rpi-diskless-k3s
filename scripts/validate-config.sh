@@ -99,7 +99,7 @@ else
 fi
 
 # DNS servers validation
-dns_servers=($(yaml_get_array "network.dns_servers"))
+dns_servers=($(yaml_get_array ".network.dns_servers[]"))
 if [ ${#dns_servers[@]} -gt 0 ]; then
     report_ok "DNS servers: ${dns_servers[*]}"
     for dns in "${dns_servers[@]}"; do
@@ -108,8 +108,7 @@ if [ ${#dns_servers[@]} -gt 0 ]; then
         fi
     done
 else
-    report_warning "DNS servers not validated (yaml_get_array limitation)"
-    report_ok "Skipping DNS validation - ensure dns_servers is properly configured in YAML"
+    report_error "At least one DNS server is required in network.dns_servers"
 fi
 
 # LoadBalancer pool validation
@@ -275,7 +274,7 @@ else
     report_warning "Invalid SSH port: $ssh_port (using default 22)"
 fi
 
-auth_keys=($(yaml_get_array "ssh.authorized_keys"))
+auth_keys=($(yaml_get_array ".ssh.authorized_keys[]"))
 if [ ${#auth_keys[@]} -gt 0 ]; then
     report_ok "SSH authorized keys: ${#auth_keys[@]} key(s) configured"
 else

@@ -44,7 +44,7 @@ process_overlay_packages() {
     local alpine_major=$(echo "$alpine_version" | cut -d'.' -f1-2)
     local base_url="http://dl-cdn.alpinelinux.org/alpine/v${alpine_major}/main/${arch}"
 
-    local packages=$(yaml_get_array "overlay_packages" "$config_file")
+    local packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
 
     if [ -z "$packages" ]; then
         echo "No overlay packages specified"
@@ -232,7 +232,7 @@ EOF
 
     # Add SSH authorized keys if provided (overwrite any existing file)
     rm -f "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
-    yaml_get_array "ssh.authorized_keys" | while read -r key; do
+    yaml_get_array ".ssh.authorized_keys[]" | while read -r key; do
         if [ -n "$key" ]; then
             echo "$key" >> "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
         fi

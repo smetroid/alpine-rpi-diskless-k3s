@@ -74,7 +74,8 @@ yaml_get() {
 
 # Function to get array values from YAML
 # Returns newline-separated list of values
-# For arrays of objects with 'name:' field, extracts the name value
+# Uses yq for reliable YAML parsing
+# Usage: yaml_get_array ".path.to.array[]" file
 yaml_get_array() {
     local key="$1"
     local file="${2:-$CONFIG_FILE}"
@@ -84,58 +85,13 @@ yaml_get_array() {
         return 1
     fi
 
-    # Handle nested keys
-    local prefix=""
-    local search_key="$key"
-
-    if [[ "$key" == *.* ]]; then
-        prefix=$(echo "$key" | cut -d. -f1)
-        search_key=$(echo "$key" | cut -d. -f2-)
+    if ! command -v yq >/dev/null 2>&1; then
+        echo "Error: yq is required but not installed. Install with: brew install yq" >&2
+        return 1
     fi
 
-    # Use sed to extract the array, then awk to process items
-    # First extract the section containing the array
-    sed -n '/^'${key}':/,/^[a-zA-Z]/p' "$file" | awk -v key="$key" '
-    BEGIN { in_array = 0 }
-
-    /^'${key}':/ { in_array = 1; next }
-
-    # Exit at next section
-    /^[a-zA-Z_][a-zA-Z0-9_]*:/ && !/^'${key}':/ { exit }
-
-    # Process array items
-    in_array && /^-[[:space:]]/ {
-        # Remove leading dash and whitespace
-        gsub(/^[[:space:]]*-[[:space:]]*/, "")
-
-        # Check if this is a name field
-        if (/^name:[[:space:]]*/) {
-            # Extract name value
-            sub(/^name:[[:space:]]*/, "")
-            # Remove quotes
-            gsub(/^"/, "")
-            gsub(/"$/, "")
-            # Remove inline comments
-            gsub(/#.*/, "")
-            # Remove surrounding whitespace
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-            print $0
-        } else if (!/^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:/) {
-            # Simple value (not a key-value pair)
-            # Remove quotes
-            if (/^"/) {
-                gsub(/^"/, "")
-                gsub(/"$/, "")
-            }
-            # Remove inline comments
-            gsub(/#.*$/, "")
-            # Remove surrounding whitespace
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-            if (length($0) > 0) print $0
-        }
-        next
-    }
-    '
+    # Use yq to extract array values (caller provides full yq expression)
+    yq e "$key" "$file" 2>/dev/null
 }
 
 # Function to get all nodes
@@ -210,7 +166,7 @@ yaml_get_nodes() {
 get_cluster_name() { yaml_get "cluster.name"; }
 get_network_gateway() { yaml_get "network.gateway"; }
 get_network_subnet() { yaml_get "network.subnet"; }
-get_dns_servers() { yaml_get_array "network.dns_servers"; }
+get_dns_servers() { yaml_get_array ".network.dns_servers[]"; }
 # LoadBalancer pool configuration helpers
 get_metallb_start() {
     local file="${1:-$CONFIG_FILE}"
@@ -362,7 +318,7 @@ get_service_replicas() {
 }
 get_k3s_cluster_cidr() { yaml_get "k3s.cluster_cidr"; }
 get_k3s_service_cidr() { yaml_get "k3s.service_cidr"; }
-get_alpine_packages() { yaml_get_array "alpine.packages"; }
+get_alpine_packages() { yaml_get_array ".alpine.packages[]"; }
 get_alpine_timezone() { yaml_get "alpine.timezone"; }
 
 # Datastore functions (3-level nesting: k3s.datastore.*)
