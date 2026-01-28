@@ -69,7 +69,6 @@ cd "$VM_DIR"
 DATA_DISK=data.qcow2
 OVERLAY_DIR=$TEST_DIR/overlaydir
 mkdir -p "$OVERLAY_DIR"
-APKVOL="$PROJECT_DIR/builds/k3s-21.apkovl.tar.gz"
 
 # Create QEMU device setup service for testing
 create_qemu_device_service() {
