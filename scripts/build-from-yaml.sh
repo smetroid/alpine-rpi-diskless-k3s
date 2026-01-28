@@ -8,15 +8,31 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
 
-# Build directory (default: builds)
-BUILD_DIR="${BUILD_DIR:-builds}"
-
 # Get absolute path to config file before changing directories
 CONFIG_FILE="${1}"
 if [ -n "$CONFIG_FILE" ]; then
     # Convert to absolute path
     CONFIG_FILE="$(cd "$(dirname "$CONFIG_FILE")" 2>/dev/null && pwd)/$(basename "$CONFIG_FILE")"
 fi
+
+# Build directory - determine based on config basename
+# Production configs (k3s.yaml, cluster-*.yaml) -> builds/
+# Testing configs (qemu.yaml, *-test.yaml, *-qemu.yaml) -> builds-qemu/
+determine_build_dir() {
+    local config_basename
+    config_basename="$(basename "${CONFIG_FILE}")"
+
+    case "$config_basename" in
+        qemu.yaml|*-test.yaml|*-qemu.yaml)
+            echo "builds-qemu"
+            ;;
+        *)
+            echo "builds"
+            ;;
+    esac
+}
+
+BUILD_DIR="${BUILD_DIR:-$(determine_build_dir)}"
 
 echo "=== Alpine Diskless k3s YAML Setup Builder ==="
 echo "Using configuration: $CONFIG_FILE"
