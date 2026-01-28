@@ -2,11 +2,37 @@
 
 # True Alpine Diskless Boot Simulation
 # Simulates exactly how Alpine diskless works on Raspberry Pi
+#
+# Usage: ./test-alpine-diskless-boot.sh [config-file]
+#   config-file: YAML configuration file (default: qemu.yaml)
 
 set -e
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$TEST_DIR")"
+
+# Determine config file and build directory
+CONFIG_FILE="${1:-qemu.yaml}"
+CONFIG_BASENAME="$(basename "$CONFIG_FILE")"
+
+# Determine build directory based on config basename
+case "$CONFIG_BASENAME" in
+    qemu.yaml|*-test.yaml|*-qemu.yaml)
+        BUILD_DIR="builds-qemu"
+        ;;
+    *)
+        BUILD_DIR="builds"
+        ;;
+esac
+
+# Get first node name from config (for default testing)
+NODE_NAME="${TEST_NODE:-qemu-test-1}"
+APKVOL="$PROJECT_DIR/$BUILD_DIR/${NODE_NAME}.apkovl.tar.gz"
+
+echo "Using configuration: $CONFIG_FILE"
+echo "Build directory: $BUILD_DIR"
+echo "Overlay archive: $APKVOL"
+echo ""
 
 # --- Logging setup ---
 SCRIPT_NAME=$(basename "$0")
@@ -196,17 +222,28 @@ NETWORK_MODE="${NETWORK_MODE:-dhcp}"  # dhcp or bridge
 echo "🌐 Network mode: $NETWORK_MODE"
 
 # Check for overlay files first
-if [ ! -d "$PROJECT_DIR/builds/k3s-21-apkovl" ] && [ ! -f "$PROJECT_DIR/builds/k3s-21.apkovl.tar.gz" ]; then
-    echo "❌ No overlay found in builds/ directory"
-    echo "💡 Please run first: ./scripts/build-from-yaml.sh"
+if [ ! -f "$APKVOL" ]; then
+    echo "❌ No overlay found: $APKVOL"
     echo ""
-    echo "This will generate the k3s-21-apkovl overlay that contains:"
+    echo "💡 Please run first:"
+    if [ "$BUILD_DIR" = "builds-qemu" ]; then
+        echo "   make build-test"
+        echo "   or: ./scripts/build-from-yaml.sh qemu.yaml"
+    else
+        echo "   make build CONFIG=$CONFIG_FILE"
+        echo "   or: ./scripts/build-from-yaml.sh $CONFIG_FILE"
+    fi
+    echo ""
+    echo "This will generate the ${NODE_NAME}-apkovl overlay that contains:"
     echo "  • /usr/local/bin/k3s_bootstrap script"
     echo "  • /etc/local.d/10-k3s-bootstrap.start service"
     echo "  • /etc/runlevels/default/local symlink"
     echo "  • Network and k3s configuration"
     exit 1
 fi
+
+echo "✓ Found overlay archive: $APKVOL"
+echo ""
 
 # Download standard Alpine
 ALPINE_ISO="alpine-virt-${ALPINE_VERSION}-x86_64.iso"
@@ -302,6 +339,9 @@ if [ ! -f "$DATA_DISK" ]; then
 fi
 
 # Prepare overlay based on network mode
+# TODO: Once qemu.yaml is fully configured for testing, we can skip overlay
+# modifications and use the pre-built apkovl directly. For now, we still need
+# to add QEMU-specific testing services and adjust network configuration.
 log "Preparing overlay for $NETWORK_MODE mode..."
 TEMP_OVERLAY="$VM_DIR/temp-overlay"
 rm -rf "$TEMP_OVERLAY"
@@ -314,6 +354,9 @@ tar -xzf "$APKVOL"
 # Add QEMU device setup service for testing
 log "Adding QEMU device setup service for testing..."
 create_qemu_device_service "$TEMP_OVERLAY"
+
+# For qemu.yaml configs, skip network/k3s modifications (already configured)
+if [ "$BUILD_DIR" != "builds-qemu" ]; then
 
 # Modify network config for DHCP mode
 if [ "$NETWORK_MODE" = "dhcp" ]; then
@@ -429,7 +472,7 @@ EOF
     
     # Enable the dynamic-network service in default runlevel
     ln -sf /etc/init.d/dynamic-network etc/runlevels/default/dynamic-network
-fi
+fi  # End of non-qemu.yaml DHCP modifications
 
 # Debug: Check what files exist before repacking
 log "Files in overlay before repacking:"
@@ -438,18 +481,19 @@ ls -la etc/network/ || log "etc/network directory not found"
 ls -la root/.ssh/authorized_keys 2>/dev/null || log "authorized_keys not found"
 
 # Repack overlay (include root directory!)
-# Use k3s-21-test to match the hostname set above
-tar -czf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" etc usr root var 2>/dev/null
+# Use node name from config for the overlay filename
+TEST_OVERLAY_NAME="${NODE_NAME}-test.apkovl.tar.gz"
+tar -czf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" etc usr root var 2>/dev/null
 cd "$VM_DIR"
 
 # Debug: Check overlay contents
 log "Checking overlay contents:"
-tar -tzf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" | grep interfaces || log "No interfaces file in overlay"
-tar -tzf "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" | grep authorized_keys || log "No authorized_keys in overlay"
+tar -tzf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" | grep interfaces || log "No interfaces file in overlay"
+tar -tzf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" | grep authorized_keys || log "No authorized_keys in overlay"
 
 rm -rf "$TEMP_OVERLAY"
 
-if [ -f "$OVERLAY_DIR/k3s-21-test.apkovl.tar.gz" ]; then
+if [ -f "$OVERLAY_DIR/$TEST_OVERLAY_NAME" ]; then
     log "Successfully prepared overlay for $NETWORK_MODE mode"
 else
     log "ERROR: Failed to prepare overlay"
