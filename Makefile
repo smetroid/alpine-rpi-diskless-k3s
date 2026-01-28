@@ -21,17 +21,21 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean setup-sd test test-boot test-logging \
-        test-server test-worker test-cluster-status test-cluster-stop
+.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-logging \
+        test-server test-worker test-cluster-status test-cluster-stop \
+        build-test test-qemu
 
 # Default target
 help:
 	@echo "Alpine Linux Diskless k3s Cluster - Build System"
 	@echo ""
 	@echo "Build Targets:"
-	@echo "  make build              Build all apkovl archives from YAML config"
+	@echo "  make build              Build all apkovl archives from YAML config (production)"
+	@echo "  make build-test         Build test apkovl archives from qemu.yaml"
 	@echo "  make validate           Validate YAML configuration"
-	@echo "  make clean              Remove all build artifacts"
+	@echo "  make clean              Remove production build artifacts"
+	@echo "  make clean-test         Remove test build artifacts"
+	@echo "  make clean-all          Remove all artifacts (production + test)"
 	@echo ""
 	@echo "Disk Targets:"
 	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
@@ -41,6 +45,7 @@ help:
 	@echo "  make test               Run single-node diskless boot simulation"
 	@echo "  make test-boot          Alias for 'make test'"
 	@echo "  make test-logging       Run logging tests"
+	@echo "  make test-qemu          Full QEMU test workflow (build + boot)"
 	@echo ""
 	@echo "Test Targets (Multi-Node Cluster):"
 	@echo "  make test-server        Start k3s server VM (run first, in terminal 1)"
@@ -56,6 +61,8 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build CONFIG=my-cluster.yaml"
+	@echo "  make build-test          # Build QEMU test config"
+	@echo "  make test-qemu           # Full QEMU test workflow"
 	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
 
 # =============================================================================
@@ -85,6 +92,11 @@ build-manifests:
 build-archives:
 	./$(SCRIPTS_DIR)/create-apkovl-archives.sh $(CONFIG)
 
+# Build test configuration (qemu.yaml)
+build-test:
+	@echo "Building test apkovl archives from qemu.yaml..."
+	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml
+
 # =============================================================================
 # Disk Targets
 # =============================================================================
@@ -104,6 +116,11 @@ endif
 
 # Run full diskless boot simulation with QEMU
 test: test-boot
+
+# Full QEMU test workflow - build and boot test config
+test-qemu: build-test
+	@echo "Running QEMU test boot..."
+	./$(TEST_DIR)/test-alpine-diskless-boot.sh qemu.yaml
 
 test-boot:
 	@echo "Running Alpine diskless boot simulation..."
@@ -143,15 +160,24 @@ test-cluster-stop:
 
 # Remove all build artifacts
 clean:
-	@echo "Cleaning build directory..."
-	rm -rf $(BUILD_DIR)/*-apkovl
-	rm -f $(BUILD_DIR)/*.apkovl.tar.gz
-	rm -rf $(BUILD_DIR)/k3s-manifests
-	rm -f $(BUILD_DIR)/k3s-token.txt
-	@echo "Build artifacts cleaned."
+	@echo "Cleaning production build directory..."
+	rm -rf builds/*-apkovl
+	rm -f builds/*.apkovl.tar.gz
+	rm -rf builds/k3s-manifests
+	rm -f builds/k3s-token.txt
+	@echo "Production build artifacts cleaned."
+
+# Remove test build artifacts only
+clean-test:
+	@echo "Cleaning test build directory..."
+	rm -rf builds-qemu/*-apkovl
+	rm -f builds-qemu/*.apkovl.tar.gz
+	rm -rf builds-qemu/k3s-manifests
+	rm -f builds-qemu/k3s-token.txt
+	@echo "Test build artifacts cleaned."
 
 # Deep clean - also removes qcow2 images and test artifacts
-clean-all: clean
+clean-all: clean clean-test
 	@echo "Removing qcow2 images and test artifacts..."
 	rm -f $(BUILD_DIR)/*.qcow2
 	rm -f $(BUILD_DIR)/*.raw
