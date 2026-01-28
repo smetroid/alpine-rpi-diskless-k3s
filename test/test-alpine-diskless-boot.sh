@@ -337,11 +337,9 @@ if [ ! -f "$DATA_DISK" ]; then
   fi
 fi
 
-# Prepare overlay based on network mode
-# TODO: Once qemu.yaml is fully configured for testing, we can skip overlay
-# modifications and use the pre-built apkovl directly. For now, we still need
-# to add QEMU-specific testing services and adjust network configuration.
-log "Preparing overlay for $NETWORK_MODE mode..."
+# Prepare overlay - extract and add QEMU-specific testing services
+# Note: For qemu.yaml configs, the overlay already has correct network configuration
+log "Preparing overlay for testing..."
 TEMP_OVERLAY="$VM_DIR/temp-overlay"
 rm -rf "$TEMP_OVERLAY"
 mkdir -p "$TEMP_OVERLAY"
@@ -350,129 +348,9 @@ mkdir -p "$TEMP_OVERLAY"
 cd "$TEMP_OVERLAY"
 tar -xzf "$APKVOL"
 
-# Add QEMU device setup service for testing
+# Add QEMU device setup service for testing (storage simulation)
 log "Adding QEMU device setup service for testing..."
 create_qemu_device_service "$TEMP_OVERLAY"
-
-# For qemu.yaml configs, skip network/k3s modifications (already configured)
-if [ "$BUILD_DIR" != "builds-qemu" ]; then
-
-# Modify network config for DHCP mode
-if [ "$NETWORK_MODE" = "dhcp" ]; then
-    log "Configuring DHCP networking for testing..."
-    
-    # Modify existing interfaces file to use DHCP instead of static
-    # Keep the loopback configuration but replace eth0 static with dynamic detection
-    cat > etc/network/interfaces << 'EOF'
-auto lo
-iface lo inet loopback
-EOF
-    
-    # Change hostname for testing
-    echo "k3s-21-test" > etc/hostname
-
-    # Fix k3s config for QEMU: replace RPi IP with QEMU IP (10.0.2.15)
-    log "Configuring k3s for QEMU network..."
-    if [ -f etc/k3s/config.yaml ]; then
-        # QEMU user-mode networking always assigns 10.0.2.15 to the guest
-        sed 's/192\.168\.254\.21/10.0.2.15/g' etc/k3s/config.yaml > etc/k3s/config.yaml.tmp
-        mv etc/k3s/config.yaml.tmp etc/k3s/config.yaml
-        log "Updated k3s config to use QEMU IP (10.0.2.15)"
-    fi
-
-    # Disable networking service to avoid conflicts
-    rm -f etc/runlevels/default/networking
-    
-    # Create dynamic network OpenRC service
-    cat > etc/init.d/dynamic-network << 'EOF'
-#!/sbin/openrc-run
-
-description="Dynamic network interface configuration service"
-name="dynamic network"
-
-depend() {
-    need localmount
-    after localmount
-    before system-bootstrap k3s-bootstrap
-    provide network-config
-}
-
-start_pre() {
-    ebegin "Preparing dynamic network configuration"
-    return 0
-}
-
-start() {
-    ebegin "Configuring network interfaces dynamically"
-    
-    # Build network interfaces file dynamically
-    cat > /etc/network/interfaces << 'NETEOF'
-auto lo
-iface lo inet loopback
-
-NETEOF
-    
-    # Scan for ethernet interfaces and add DHCP config
-    local found_interfaces=0
-    for dev in /sys/class/net/*; do
-        [ -e "$dev" ] || continue
-        INTERFACE=""
-        . "$dev"/uevent 2>/dev/null || continue
-        
-        case ${INTERFACE%%[0-9]*} in
-            lo) ;;
-            eth|enp|ens)
-                einfo "Found ethernet interface: $INTERFACE"
-                cat >> /etc/network/interfaces << NETEOF
-auto $INTERFACE
-iface $INTERFACE inet dhcp
-
-NETEOF
-                found_interfaces=$((found_interfaces + 1))
-                ;;
-            *)
-                # Try to configure any other interface as DHCP too
-                einfo "Found other interface: $INTERFACE"  
-                cat >> /etc/network/interfaces << NETEOF
-auto $INTERFACE
-iface $INTERFACE inet dhcp
-
-NETEOF
-                found_interfaces=$((found_interfaces + 1))
-                ;;
-        esac
-    done
-    
-    if [ $found_interfaces -eq 0 ]; then
-        ewarn "No network interfaces found"
-        eend 1 "No network interfaces detected"
-        return 1
-    fi
-    
-    einfo "Network interfaces file configured with $found_interfaces interfaces"
-    
-    # Start networking manually
-    einfo "Starting network interfaces"
-    if ifup -a; then
-        eend 0 "Network interfaces brought up successfully"
-    else  
-        eend 1 "Some network interfaces failed to start"
-        return 1
-    fi
-}
-
-stop() {
-    ebegin "Stopping dynamic network"
-    ifdown -a 2>/dev/null || true
-    eend 0
-}
-EOF
-    chmod +x etc/init.d/dynamic-network
-    
-    # Enable the dynamic-network service in default runlevel
-    ln -sf /etc/init.d/dynamic-network etc/runlevels/default/dynamic-network
-fi  # End of non-qemu.yaml DHCP modifications
-fi  # End of BUILD_DIR != builds-qemu check
 
 # Debug: Check what files exist before repacking
 log "Files in overlay before repacking:"
@@ -514,7 +392,8 @@ if [ "$NETWORK_MODE" = "dhcp" ]; then
     echo ""
 
     # Kernel command line matching RPi boot configuration with cgroups enabled
-    KERNEL_CMDLINE="modules=loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 console=tty1 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
+    # Serial console only for -nographic mode (no graphical console)
+    KERNEL_CMDLINE="modules=loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
 
     echo "🔧 Booting with kernel parameters (matches RPi config):"
     echo "   $KERNEL_CMDLINE"
@@ -526,12 +405,12 @@ if [ "$NETWORK_MODE" = "dhcp" ]; then
       -initrd "$INITRD_FILE" \
       -append "$KERNEL_CMDLINE" \
       -cdrom "$ALPINE_ISO" \
-      -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=1.1.1.1 \
+      -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::6443-:6443,hostfwd=tcp::8080-:8080,dns=8.8.8.8 \
       -device virtio-net-pci,netdev=net0 \
       -drive file="$DATA_DISK",format=qcow2 \
-      -drive file=fat:rw:"$OVERLAY_DIR",format=raw
-
-      #-nographic \
+      -drive file=fat:rw:"$OVERLAY_DIR",format=raw \
+      -display none \
+      -serial mon:stdio
 
 elif [ "$NETWORK_MODE" = "bridge" ]; then
     echo "📝 Bridge Mode - Creates realistic network environment:"
@@ -545,7 +424,8 @@ elif [ "$NETWORK_MODE" = "bridge" ]; then
     echo ""
 
     # Kernel command line matching RPi boot configuration with cgroups enabled
-    KERNEL_CMDLINE="modules loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 console=tty1 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
+    # Serial console only for terminal mode
+    KERNEL_CMDLINE="modules loop,squashfs,sd-mod,usb-storage quiet console=ttyS0,115200 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1"
 
     echo "🔧 Booting with kernel parameters (matches RPi config):"
     echo "   $KERNEL_CMDLINE"
