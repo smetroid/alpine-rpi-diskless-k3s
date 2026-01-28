@@ -259,6 +259,9 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     # Add e2fsprogs binaries and libraries (mkfs.ext4 needed during boot)
     add_e2fsprogs_to_apkovl "${NODE_NAME}-apkovl"
 
+    # Process overlay packages from YAML config
+    process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
+
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
 
