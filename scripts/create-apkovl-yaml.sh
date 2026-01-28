@@ -37,6 +37,73 @@ discover_package_version() {
     ' "$apkindex_dir/APKINDEX"
 }
 
+# Process overlay packages from YAML config
+# Downloads and extracts packages to overlay for early boot availability
+process_overlay_packages() {
+    local apkovl_dir="$1"
+    local config_file="$2"
+    local arch=$(yaml_get "alpine.architecture" "$config_file")
+    local alpine_version=$(yaml_get "alpine.version" "$config_file")
+    local alpine_major=$(echo "$alpine_version" | cut -d'.' -f1-2)
+    local base_url="http://dl-cdn.alpinelinux.org/alpine/v${alpine_major}/main/${arch}"
+
+    local packages=$(yaml_get_array "overlay_packages" "$config_file")
+
+    if [ -z "$packages" ]; then
+        echo "No overlay packages specified"
+        return 0
+    fi
+
+    echo "Processing overlay packages..."
+
+    # Download APKINDEX once for all packages
+    local cache_dir="/tmp/overlay-packages-cache"
+    rm -rf "$cache_dir"
+    mkdir -p "$cache_dir"
+
+    if ! curl -sL "${base_url}/APKINDEX.tar.gz" -o "$cache_dir/APKINDEX.tar.gz"; then
+        echo "Error: Failed to download APKINDEX"
+        rm -rf "$cache_dir"
+        return 1
+    fi
+
+    tar -xzf "$cache_dir/APKINDEX.tar.gz" -C "$cache_dir"
+
+    # Process each package
+    while IFS= read -r pkg_name; do
+        [ -z "$pkg_name" ] && continue
+        echo "Processing overlay package: $pkg_name"
+
+        # Discover version using discover_package_version function
+        local version=$(discover_package_version "$pkg_name" "$cache_dir")
+        if [ -z "$version" ]; then
+            echo "Error: Package $pkg_name not found in APKINDEX"
+            rm -rf "$cache_dir"
+            return 1
+        fi
+
+        echo "Found $pkg_name version: $version"
+
+        # Download package
+        local apk_file="${cache_dir}/${pkg_name}.apk"
+        if ! curl -sL "${base_url}/${pkg_name}-${version}.apk" -o "$apk_file"; then
+            echo "Error: Failed to download $pkg_name"
+            rm -rf "$cache_dir"
+            return 1
+        fi
+
+        # Extract entire package to overlay
+        # This includes: binaries, libraries, config files, documentation
+        tar -xzf "$apk_file" -C "$apkovl_dir"
+
+        echo "Added $pkg_name to overlay"
+    done <<< "$packages"
+
+    # Clean up cache
+    rm -rf "$cache_dir"
+    echo "Overlay packages processing complete"
+}
+
 # Function to download and extract e2fsprogs binaries and libraries
 # These are needed for mkfs.ext4 during storage-init service (before apk packages are installed)
 prepare_e2fsprogs() {
