@@ -7,11 +7,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$PROJECT_DIR/test"
-VM_DIR="$TEST_DIR/vm-diskless"
 
 echo "Creating partitioned disk template for QEMU testing..."
-mkdir -p "$VM_DIR"
-cd "$VM_DIR"
+cd "$TEST_DIR"
 
 python3 << 'PYEOF'
 import subprocess
@@ -54,7 +52,7 @@ print("✓ Template created")
 PYEOF
 
 echo ""
-echo "✓ Template created: $VM_DIR/data-partitioned-template.qcow2"
+echo "✓ Template created: $TEST_DIR/data-partitioned-template.qcow2"
 echo ""
 echo "Template contains:"
 echo "  Partition 1: 256MB boot (FAT32/LBA, bootable)"
