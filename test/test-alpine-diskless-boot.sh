@@ -89,7 +89,6 @@ depend() {
 
 start() {
     ebegin "Test Script: Setting up QEMU device simulation"
-    apk add e2fsprogs
     
     # Enhanced logger functions
     _log() { echo "$*" | logger -t "qemu-device-setup" 2>/dev/null || echo "$*"; }
@@ -321,7 +320,7 @@ DATA_DISK_TEMPLATE="data-partitioned-template.qcow2"
 if [ ! -f "$DATA_DISK" ]; then
   if [ -f "$DATA_DISK_TEMPLATE" ]; then
     log "Using pre-partitioned template: $DATA_DISK_TEMPLATE"
-    cp "$DATA_DISK_TEMPLATE" "$DATA_DISK"
+    qemu-img convert -f qcow2 -O qcow2 "$DATA_DISK_TEMPLATE" "$DATA_DISK"
     log "Copied template to $DATA_DISK"
   else
     log "Creating $DATA_DISK (4G)..."
@@ -329,7 +328,7 @@ if [ ! -f "$DATA_DISK" ]; then
       log "Successfully created data disk"
       log "NOTE: First boot will partition this disk"
       log "After successful first boot, save as template:"
-      log "  cp $DATA_DISK $DATA_DISK_TEMPLATE"
+      log "  qemu-img convert -f qcow2 -O qcow2 $DATA_DISK $DATA_DISK_TEMPLATE"
     else
       log "ERROR: Failed to create data disk"
       exit 1
@@ -361,13 +360,14 @@ ls -la root/.ssh/authorized_keys 2>/dev/null || log "authorized_keys not found"
 # Repack overlay (include root directory!)
 # Use node name from config for the overlay filename
 TEST_OVERLAY_NAME="${NODE_NAME}-test.apkovl.tar.gz"
-tar -czf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" etc usr root var 2>/dev/null
+tar -czf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" etc usr root var sbin 2>/dev/null
 cd "$VM_DIR"
 
 # Debug: Check overlay contents
 log "Checking overlay contents:"
 tar -tzf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" | grep interfaces || log "No interfaces file in overlay"
 tar -tzf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" | grep authorized_keys || log "No authorized_keys in overlay"
+tar -tzf "$OVERLAY_DIR/$TEST_OVERLAY_NAME" | grep mkfs.ext4 || log "No mkfs.ext4 in overlay"
 
 rm -rf "$TEMP_OVERLAY"
 
