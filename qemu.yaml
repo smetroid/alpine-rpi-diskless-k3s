@@ -10,11 +10,10 @@ network:
   domain: "local"
   subnet: "10.0.2.0/24"
   gateway: "10.0.2.2"
-  # Note: Using Google DNS instead of QEMU's default (10.0.2.3) for better reliability
-  # QEMU's internal DNS server can be flaky during boot, causing package download failures
+  # Note: Using Cloudflare DNS for better reliability
   dns_servers:
-    - "8.8.8.8"
-    - "8.8.4.4"
+    - "1.1.1.1"
+    - "1.0.0.1"
 
   # MetalLB LoadBalancer IP range
   loadbalancer_pool:
