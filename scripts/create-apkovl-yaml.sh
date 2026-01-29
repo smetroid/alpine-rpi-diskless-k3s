@@ -895,8 +895,8 @@ description="Persistent SSH setup service"
 name="ssh persist"
 
 depend() {
-    need storage-init
-    after storage-init
+    need storage-init net
+    after storage-init net
     before system-bootstrap
     provide ssh-persist
 }
@@ -974,13 +974,15 @@ start() {
     chmod 644 /etc/ssh/sshd_config 2>/dev/null
 
     # Create /var/empty directory for sshd privilege separation
-    # This is required by sshd but may not exist in diskless environment
+    # This is required by sshd but may not exist or have wrong permissions in diskless environment
     if [ ! -d /var/empty ]; then
         einfo "Creating /var/empty for sshd privilege separation..."
         mkdir -p /var/empty
-        chown root:root /var/empty
-        chmod 755 /var/empty
     fi
+    # Always fix ownership and permissions (directory may exist with wrong perms from base system)
+    einfo "Fixing /var/empty ownership and permissions..."
+    chown root:root /var/empty 2>/dev/null
+    chmod 755 /var/empty 2>/dev/null
 
     # Enable and start sshd
     if ! rc-service sshd status >/dev/null 2>&1; then
