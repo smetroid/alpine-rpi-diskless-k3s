@@ -117,3 +117,9 @@ ssh:
 overlay_packages:
   - name: "openssh"
   - name: "e2fsprogs"
+  - name: "e2fsprogs-libs"  # Shared libraries for mkfs.ext4
+  - name: "libcom_err"  # Error description library
+  - name: "libblkid"  # Block device ID library
+  - name: "libuuid"  # UUID library
+  - name: "libeconf"  # Config file library (needed by libblkid)
+  - name: "util-linux"  # Provides blkid, uuidgen binaries
