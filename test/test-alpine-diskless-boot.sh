@@ -231,7 +231,7 @@ if [ ! -f "$KERNEL_FILE" ] || [ ! -f "$INITRD_FILE" ]; then
 fi
 
 # --- Step 2: Create persistent data disk if missing ---
-DATA_DISK_TEMPLATE="data-partitioned-template.qcow2"
+DATA_DISK_TEMPLATE="../data-partitioned-template.qcow2"
 
 # Check if we have a pre-partitioned template
 if [ ! -f "$DATA_DISK" ]; then
@@ -245,7 +245,7 @@ if [ ! -f "$DATA_DISK" ]; then
       log "Successfully created data disk"
       log "NOTE: First boot will partition this disk"
       log "After successful first boot, save as template:"
-      log "  qemu-img convert -f qcow2 -O qcow2 $DATA_DISK $DATA_DISK_TEMPLATE"
+      log "  qemu-img convert -f qcow2 -O qcow2 $DATA_DISK ../data-partitioned-template.qcow2"
     else
       log "ERROR: Failed to create data disk"
       exit 1
