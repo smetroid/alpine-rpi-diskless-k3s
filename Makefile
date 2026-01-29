@@ -25,7 +25,7 @@ UNAME := $(shell uname)
 
 .PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod test-logging \
         test-server test-worker test-cluster-status test-cluster-stop \
-        build-test test-qemu list-apkovl list-apkovl-prod list-apkovl-test show-config
+        build-test build-qemu template list-apkovl list-apkovl-prod list-apkovl-test show-config
 
 # Default target
 help:
@@ -34,10 +34,11 @@ help:
 	@echo "Build Targets:"
 	@echo "  make build              Build all apkovl archives from YAML config (production)"
 	@echo "  make build-test         Build test apkovl archives from qemu.yaml"
+	@echo "  make template           Create partitioned disk template for QEMU testing"
 	@echo "  make validate           Validate YAML configuration"
 	@echo "  make clean              Remove production build artifacts"
 	@echo "  make clean-test         Remove test build artifacts"
-	@echo "  make clean-all          Remove all artifacts (production + test)"
+	@echo "  make clean-all          Remove all artifacts (production + test + templates)"
 	@echo "  make list-apkovl        List all apkovl archives (both)"
 	@echo "  make list-apkovl-prod   List production apkovl archives"
 	@echo "  make list-apkovl-test   List test apkovl archives"
@@ -102,6 +103,12 @@ build-archives:
 build-test:
 	@echo "Building test apkovl archives from qemu.yaml..."
 	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml
+
+# Create partitioned disk template for QEMU testing
+# This creates data-partitioned-template.qcow2 with pre-formatted partitions
+template:
+	@echo "Creating partitioned disk template for QEMU testing..."
+	@./$(SCRIPTS_DIR)/create-qemu-template.sh
 
 # =============================================================================
 # Disk Targets
