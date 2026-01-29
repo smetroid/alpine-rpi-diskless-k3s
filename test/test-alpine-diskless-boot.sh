@@ -73,8 +73,10 @@ mkdir -p "$OVERLAY_DIR"
 # Create QEMU device setup service for testing
 create_qemu_device_service() {
     local apkovl_dir="$1"
-    
+
     # Create qemu-device-setup OpenRC service
+    # This service simulates Raspberry Pi SD card devices in QEMU environment
+    # It creates /dev/mmcblk0* device nodes that point to the actual storage device
     cat > "${apkovl_dir}/etc/init.d/qemu-device-setup" << 'EOF'
 #!/sbin/openrc-run
 
@@ -88,128 +90,43 @@ depend() {
 }
 
 start() {
-    ebegin "Test Script: Setting up QEMU device simulation"
-    
-    # Enhanced logger functions
-    _log() { echo "$*" | logger -t "qemu-device-setup" 2>/dev/null || echo "$*"; }
-    _success() { echo "✅ $*" | logger -t "qemu-device-setup" 2>/dev/null || echo "✅ $*"; }
-    _error() { echo "❌ $*" | logger -t "qemu-device-setup" 2>/dev/null || echo "❌ $*"; }
+    ebegin "Setting up QEMU device simulation"
 
-    _log "=== QEMU TEST DETECTION AND DEVICE SETUP ==="
-
-    # Check if we're running in QEMU (look for QEMU-specific devices)
-    QEMU_DETECTED=false
-    if [ -b /dev/sda ] || [ -b /dev/vda ] || grep -q "QEMU" /proc/cpuinfo 2>/dev/null; then
-        QEMU_DETECTED=true
-        _log "🖥️  QEMU environment detected - setting up device simulation"
+    # Detect storage device (QEMU provides /dev/sda or /dev/vda)
+    STORAGE_DEV=""
+    if [ -b /dev/sda ]; then
+        STORAGE_DEV="/dev/sda"
+    elif [ -b /dev/vda ]; then
+        STORAGE_DEV="/dev/vda"
     fi
 
-    if [ "$QEMU_DETECTED" = "true" ]; then
-        # Determine which storage device is available
-        STORAGE_DEV=""
-        if [ -b /dev/sda ]; then
-            STORAGE_DEV="/dev/sda"
-            _log "Using /dev/sda for storage simulation"
-        elif [ -b /dev/vda ]; then
-            STORAGE_DEV="/dev/vda" 
-            _log "Using /dev/vda for storage simulation"
-        fi
-        
-        if [ -n "$STORAGE_DEV" ]; then
-            _success "Storage device: $STORAGE_DEV detected"
-
-            # Check for reboot detection - look for system initialization marker
-            SYSTEM_INITIALIZED=false
-            mkdir -p /tmp/mnt_check 2>/dev/null || true
-
-            # Try to mount data partition to check for initialization marker
-            #if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-            #    if [ -f "/tmp/mnt_check/.system-initialized" ]; then
-            #        SYSTEM_INITIALIZED=true
-            #        _log "🔄 System reboot detected - initialization marker found"
-            #    fi
-            #    umount /tmp/mnt_check 2>/dev/null || true
-            #fi
-
-            if [ "$SYSTEM_INITIALIZED" = "false" ]; then
-                # First boot - partition the storage device to simulate SD card
-                _log "🆕 First boot detected - setting up storage partitions (simulating Pi SD card)..."
-                (echo n; echo p; echo 1; echo; echo +256M; echo n; echo p; echo 2; echo; echo; echo t; echo 1; echo c; echo w) | fdisk "$STORAGE_DEV" >/dev/null 2>&1 || true
-                sleep 2
-
-                # Ensure kernel recognizes partitions
-                partprobe "$STORAGE_DEV" 2>/dev/null || true
-
-                # CRITICAL: Wait for kernel to create partition device nodes
-                # After fdisk+partprobe, devices appear asynchronously
-                _log "Waiting for partition devices to appear..."
-                local timeout=10
-                local count=0
-                while [ $count -lt $timeout ]; do
-                    if [ -b "${STORAGE_DEV}1" ] && [ -b "${STORAGE_DEV}2" ]; then
-                        _success "Partition devices ready: ${STORAGE_DEV}1, ${STORAGE_DEV}2"
-                        break
-                    fi
-                    sleep 1
-                    count=$((count + 1))
-                done
-
-                if [ $count -ge $timeout ]; then
-                    _error "Timeout waiting for partition devices"
-                    return 1
-                fi
-
-                ## Format the data partition
-                #_log "Formatting data partition..."
-                #mkfs.ext4 -F "${STORAGE_DEV}2" >/dev/null 2>&1 || true
-
-                ## Mount and create initialization marker
-                #if mount -t ext4 "${STORAGE_DEV}2" /tmp/mnt_check 2>/dev/null; then
-                #    echo "$(date): System initialized on first boot" > /tmp/mnt_check/.system-initialized
-                #    umount /tmp/mnt_check 2>/dev/null || true
-                #    _success "System initialization marker created"
-                #fi
-            else
-                _log "🔄 Reboot detected - skipping partitioning, ensuring device nodes exist"
-            fi
-
-            # Always ensure device nodes exist (needed for both first boot and reboots)
-            _log "Creating/ensuring Raspberry Pi device simulation..."
-            if [ -b "${STORAGE_DEV}1" ] && [ -b "${STORAGE_DEV}2" ]; then
-                mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
-                mknod /dev/mmcblk0p1 b $(stat -c "%t %T" "${STORAGE_DEV}1") 2>/dev/null || true
-                mknod /dev/mmcblk0p2 b $(stat -c "%t %T" "${STORAGE_DEV}2") 2>/dev/null || true
-                _success "Raspberry Pi SD card simulation: /dev/mmcblk0 (/dev/mmcblk0p1, /dev/mmcblk0p2)"
-            else
-                # Fallback device creation with fixed major/minor numbers
-                _log "Partitions not detected, using fallback device creation..."
-                mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
-                mknod /dev/mmcblk0p1 b 8 1 2>/dev/null || true
-                mknod /dev/mmcblk0p2 b 8 2 2>/dev/null || true
-                _success "SD card devices created (fallback method)"
-            fi
-
-            # Verify device creation
-            _log "Verifying created devices:"
-            ls -la /dev/mmcblk0* 2>/dev/null | while IFS= read -r line; do
-                _log "  $line"
-            done
-
-            # Cleanup temporary mount point
-            rmdir /tmp/mnt_check 2>/dev/null || true
-        else
-            _error "No suitable storage device found for QEMU simulation"
-        fi
-    else
-        _log "🥧 Real Raspberry Pi environment detected - using native mmcblk0 devices"
+    if [ -z "$STORAGE_DEV" ]; then
+        einfo "No QEMU storage device found, assuming real Raspberry Pi hardware"
+        eend 0
+        return 0
     fi
 
-    _log "=== DEVICE SETUP COMPLETE ==="
-    eend 0
+    einfo "QEMU detected, using $STORAGE_DEV for SD card simulation"
+
+    # Verify partitions exist (from pre-partitioned template)
+    if [ ! -b "${STORAGE_DEV}1" ] || [ ! -b "${STORAGE_DEV}2" ]; then
+        eerror "Partitions not found on $STORAGE_DEV - data-partitioned-template.qcow2 required"
+        eend 1
+        return 1
+    fi
+
+    # Create /dev/mmcblk0* device nodes to simulate Raspberry Pi SD card
+    # This allows storage-init to use standard RPi paths (/dev/mmcblk0p2)
+    einfo "Creating Raspberry Pi device nodes..."
+    mknod /dev/mmcblk0 b $(stat -c "%t %T" "$STORAGE_DEV") 2>/dev/null || true
+    mknod /dev/mmcblk0p1 b $(stat -c "%t %T" "${STORAGE_DEV}1") 2>/dev/null || true
+    mknod /dev/mmcblk0p2 b $(stat -c "%t %T" "${STORAGE_DEV}2") 2>/dev/null || true
+
+    eend 0 "QEMU device setup complete"
 }
 EOF
     chmod +x "${apkovl_dir}/etc/init.d/qemu-device-setup"
-    
+
     # Enable the service in default runlevel
     mkdir -p "${apkovl_dir}/etc/runlevels/default"
     ln -sf /etc/init.d/qemu-device-setup "${apkovl_dir}/etc/runlevels/default/qemu-device-setup"
