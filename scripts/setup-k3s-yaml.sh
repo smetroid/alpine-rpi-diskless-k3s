@@ -131,10 +131,8 @@ server: $SERVER_URL
 node-ip: $NODE_IP
 EOF
 
-        # Create token file for agent to join cluster
-        mkdir -p "${NODE_NAME}-apkovl/etc/rancher/k3s"
-        echo "$K3S_TOKEN" > "${NODE_NAME}-apkovl/etc/rancher/k3s/server-token"
-        echo "Created k3s server-token for worker node"
+        # Note: Worker will retrieve token from master via SSH during bootstrap
+        # The system-bootstrap script handles this automatically for worker nodes
 
         # Note: k3s init script is created by the k3s installer, not in the overlay
     fi

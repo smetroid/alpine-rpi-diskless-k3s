@@ -578,6 +578,52 @@ fi
 
 # Note: k3s bind mounts (/etc/k3s, /var/lib/rancher/k3s) are set up by storage-init service
 
+# For worker nodes: retrieve k3s join token from master server
+if grep -q "^server:" /etc/k3s/config.yaml 2>/dev/null; then
+    echo "🔑 Worker node detected - retrieving k3s join token from master..."
+
+    # Extract master URL from config
+    SERVER_URL=$(grep "^server:" /etc/k3s/config.yaml | cut -d' ' -f2)
+    MASTER_HOST=$(echo "\${SERVER_URL}" | sed -E 's|https?://([^:]+).*|\1|')
+    echo "   Master: \${MASTER_HOST}"
+
+    # Retrieve token from master via SSH with retry
+    _logger "Retrieving k3s token from master"
+    TOKEN_FILE="/etc/rancher/k3s/server-token"
+    MAX_RETRIES=10
+    RETRY_DELAY=10
+    RETRY_COUNT=0
+
+    while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
+        echo "   Attempting to retrieve token (attempt \$((RETRY_COUNT + 1))/\$MAX_RETRIES)..."
+
+        # SSH to master and get token
+        if TOKEN=\$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@\${MASTER_HOST} \
+                "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null); then
+            if [ -n "\$TOKEN" ]; then
+                mkdir -p /etc/rancher/k3s
+                echo "\$TOKEN" > "\$TOKEN_FILE"
+                chmod 600 "\$TOKEN_FILE"
+                echo "✅ Token retrieved successfully"
+                _logger "k3s token retrieved from master"
+                break
+            fi
+        fi
+
+        RETRY_COUNT=\$((RETRY_COUNT + 1))
+        if [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; then
+            echo "   Master not ready, waiting \${RETRY_DELAY}s before retry..."
+            sleep \$RETRY_DELAY
+        fi
+    done
+
+    if [ \$RETRY_COUNT -ge \$MAX_RETRIES ]; then
+        echo "❌ Failed to retrieve k3s token after \$MAX_RETRIES attempts"
+        _logger "Failed to retrieve k3s token from master"
+        exit 1
+    fi
+fi
+
 # Install k3s if not present
 echo "🚀 Installing k3s..."
 if [ ! -f /usr/local/bin/k3s ]; then
