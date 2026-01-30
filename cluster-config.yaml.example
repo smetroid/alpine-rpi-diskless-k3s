@@ -71,10 +71,7 @@ alpine:
     - "cgroup-tools"
 
 storage:
-  # SD card device (will be set per deployment)
-  device: "/dev/mmcblk0"
-  
-  # Partition sizes
+  # Partition sizes (used by setup-bootable-device.sh for SD card preparation)
   boot_partition_size: "512MiB"
   
   # Mount points

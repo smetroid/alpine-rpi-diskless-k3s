@@ -41,15 +41,15 @@ k3s:
 
   # External datastore for high availability (optional)
   # When enabled, all masters share the same backend database
-  datastore:
-    type: "postgres"  # postgres, mysql
-    host: "192.168.1.3"
-    port: 5432
-    database: "k3s"
-    user: "k3s"
-    password: "CHANGE_ME"
-    # SSL mode: disable, require, verify-ca, verify-full
-    sslmode: "disable"
+  #datastore:
+  #  type: "postgres"  # postgres, mysql
+  #  host: "192.168.1.3"
+  #  port: 5432
+  #  database: "k3s"
+  #  user: "k3s"
+  #  password: "CHANGE_ME"
+  #  # SSL mode: disable, require, verify-ca, verify-full
+  #  sslmode: "disable"
 
   # Load balancer VIP for worker nodes (recommended for true HA)
   # Workers connect to this VIP which distributes across all masters
@@ -91,14 +91,10 @@ alpine:
     - "chrony"  # NTP time synchronization (required for SSL/TLS)
 
 storage:
-  # USB drive device (will be set per deployment)
-  device: "/dev/sda"
-
-  # Partition sizes
+  # Partition sizes (used by setup-bootable-device.sh for SD card preparation)
   boot_partition_size: "512MiB"
 
-  # Mount points
-  data_mount: "/mnt/data"
+  # Persistent paths for bind mounts (handled by storage-init service)
   persistent_paths:
     - "/etc/k3s"
     - "/var/lib/k3s"

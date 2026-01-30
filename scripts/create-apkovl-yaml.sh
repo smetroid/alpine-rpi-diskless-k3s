@@ -308,9 +308,8 @@ EOF
     ln -sf /etc/init.d/ssh-persist "${NODE_NAME}-apkovl/etc/runlevels/default/ssh-persist"
 
     # Note: QEMU test device setup moved to test-alpine-diskless-boot.sh
-    
+
     # Create storage-init OpenRC service
-    DATA_MOUNT=$(yaml_get "storage.data_mount")
     cat > "${NODE_NAME}-apkovl/etc/init.d/storage-init" << 'EOF'
 #!/sbin/openrc-run
 
