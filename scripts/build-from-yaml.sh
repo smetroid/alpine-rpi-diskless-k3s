@@ -267,7 +267,6 @@ name="system bootstrap"
 depend() {
     need localmount storage-init ssh-persist net
     after localmount storage-init ssh-persist net
-    before k3s-bootstrap
     provide system-bootstrap
 }
 
@@ -517,6 +516,87 @@ echo "✅ System: Packages and timezone configured" > /dev/console
 # Commit the overlay to save installed packages with runtime prefix
 lbu-commit-runtime
 
+# === k3s Installation ===
+echo "=============================================="
+echo "🚀 k3s Installation"
+echo "=============================================="
+
+# Wait briefly for system to stabilize
+echo "⏳ Waiting for system to stabilize..."
+sleep 5
+
+# Verify that storage-init service has completed
+if [ ! -f /mnt/data/.storage-init-complete ]; then
+    echo "❌ Storage initialization not completed. storage-init service should run first."
+    _logger "Storage initialization not complete, cannot install k3s"
+    exit 1
+fi
+echo "✅ Disk setup verified - storage is ready"
+
+# Check if this is first boot for k3s
+if [ ! -f /mnt/data/.k3s-initialized ]; then
+    FIRST_BOOT=true
+    echo "🆕 First boot detected - performing full k3s initialization"
+else
+    FIRST_BOOT=false
+    echo "🔄 Subsequent boot - performing quick k3s setup"
+fi
+
+# Load required kernel modules for k3s networking
+echo "🔧 Loading kernel modules for k3s..."
+modprobe bridge 2>/dev/null || echo "⚠️  Bridge module not available"
+modprobe br_netfilter 2>/dev/null || echo "⚠️  br_netfilter module not available"
+
+# Ensure bridge netfilter proc entries exist
+if [ -d /proc/sys/net/bridge ]; then
+    echo "✅ Bridge networking configured"
+else
+    echo "⚠️  Bridge networking not available - k3s may have limited functionality"
+fi
+
+# Note: k3s bind mounts (/etc/k3s, /var/lib/rancher/k3s) are set up by storage-init service
+
+# Install k3s if not present
+echo "🚀 Installing k3s..."
+if [ ! -f /usr/local/bin/k3s ]; then
+    _logger "Downloading and installing k3s"
+    echo "📥 Downloading k3s..."
+
+    wget -qO- https://get.k3s.io | sh -
+    if [ \$? -eq 0 ]; then
+        echo "✅ k3s installed successfully"
+        _logger "k3s installation completed successfully"
+    else
+        echo "❌ k3s installation failed"
+        _logger "k3s installation failed"
+        exit 1
+    fi
+else
+    echo "✅ k3s already installed"
+fi
+
+# Start k3s service
+echo "🔄 Starting k3s service..."
+if [ -f /etc/k3s/config.yaml ]; then
+    _logger "Starting k3s with configuration"
+    rc-service k3s start
+    rc-update add k3s default
+    echo "✅ k3s service started and enabled"
+else
+    echo "⚠️ No k3s configuration found - k3s not started"
+fi
+
+if [ "\$FIRST_BOOT" = "true" ]; then
+    # Mark k3s initialization as complete
+    echo "\$(date): k3s initialization completed successfully" > /mnt/data/.k3s-initialized
+    _logger "Alpine k3s first boot initialization complete"
+    echo "✅ Alpine k3s first boot initialization complete"
+else
+    _logger "Alpine k3s subsequent boot setup complete"
+    echo "✅ Alpine k3s subsequent boot setup complete"
+fi
+echo "=============================================="
+
 exit 0
 SCRIPT_EOF
     chmod +x /usr/local/bin/system_bootstrap
@@ -533,90 +613,19 @@ SCRIPT_EOF
 }
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
-    
-    # Create k3s-bootstrap OpenRC service
-    cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap" << 'EOF'
-#!/sbin/openrc-run
 
-description="k3s cluster bootstrap service"
-name="k3s bootstrap"
-
-depend() {
-    need system-bootstrap net
-    after system-bootstrap net chronyd
-    use dns
-    provide k3s-bootstrap
-}
-
-start() {
-    # Check if bootstrap has already run successfully
-    if [ -f /mnt/data/.k3s-bootstrap-complete ]; then
-        einfo "k3s bootstrap already completed - skipping"
-        mark_service_started
-        return 0
-    fi
-
-    # Wait for system-bootstrap to complete
-    ebegin "Waiting for system bootstrap to complete"
-    local timeout=300  # 5 minutes max
-    local count=0
-    while [ $count -lt $timeout ]; do
-        if [ -f /usr/local/bin/.system-initialized ]; then
-            eend 0 "System bootstrap completed"
-            break
-        fi
-        sleep 1
-        count=$((count + 1))
-    done
-
-    if [ $count -ge $timeout ]; then
-        eerror "Timeout waiting for system bootstrap to complete"
-        return 1
-    fi
-
-    # Ensure the k3s_bootstrap script exists
-    if [ ! -x /usr/local/bin/k3s_bootstrap ]; then
-        eerror "k3s_bootstrap script not found at /usr/local/bin/k3s_bootstrap"
-        return 1
-    fi
-
-    ebegin "Running k3s cluster bootstrap"
-
-    # Run the bootstrap script and capture output
-    if /usr/local/bin/k3s_bootstrap; then
-        # Mark bootstrap as complete only on successful execution
-        mkdir -p /mnt/data 2>/dev/null || true
-        echo "$(date): k3s bootstrap completed successfully" > /mnt/data/.k3s-bootstrap-complete
-        eend 0 "k3s bootstrap completed successfully"
-    else
-        eend 1 "k3s bootstrap failed - will retry on next boot"
-        return 1
-    fi
-}
-
-stop() {
-    ebegin "Stopping k3s bootstrap service"
-    # This service doesn't need to be stopped, it's a one-time run
-    eend 0
-}
-EOF
-    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-bootstrap"
-    
     # Set up proper service dependencies and runlevels
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/boot"
-    
+
     # config-restore runs early in boot runlevel (before most services)
     ln -sf /etc/init.d/config-restore "${NODE_NAME}-apkovl/etc/runlevels/boot/config-restore"
-    
+
     # system-bootstrap runs in default runlevel (after config-restore)
     ln -sf /etc/init.d/system-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/system-bootstrap"
-    
+
     # config-backup runs after system-bootstrap to backup any changes
     ln -sf /etc/init.d/config-backup "${NODE_NAME}-apkovl/etc/runlevels/default/config-backup"
-    
-    # k3s-bootstrap runs after config-backup
-    ln -sf /etc/init.d/k3s-bootstrap "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-bootstrap"
     
     # No longer need 99-start-services.start since we use proper OpenRC dependencies
     # The k3s service will start automatically after k3s-installer completes
