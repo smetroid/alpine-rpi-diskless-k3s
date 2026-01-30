@@ -369,11 +369,30 @@ rc-update add hostname boot
 rc-update add sysctl boot
 rc-update add modules boot
 rc-update add chronyd default
+rc-update add cgroups boot
 
 # NOTE: SSH setup is handled by the ssh-persist service (runs on every boot)
 # This ensures SSH persists across reboots without depending on LBU backup/restore
 
 rc-update add savecache shutdown
+
+# Mount cgroups for k3s
+_logger "Mounting cgroups filesystem"
+echo "🔧 Mounting cgroups filesystem..."
+# Mount cgroup v2 hierarchy (unified) with backwards compatibility
+if ! mountpoint -q /sys/fs/cgroup; then
+    mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || {
+        # Fallback to cgroup v1 if v2 not available
+        mount -t tmpfs cgroup_root /sys/fs/cgroup
+        mkdir -p /sys/fs/cgroup/{cpu,cpuacct,memory,devices,freezer,net_cls,blkio}
+        for subsystem in cpu cpuacct memory devices freezer net_cls blkio; do
+            mount -t cgroup -o ${subsystem} ${subsystem} /sys/fs/cgroup/${subsystem} 2>/dev/null || true
+        done
+    }
+    echo "✅ Cgroups mounted"
+else
+    echo "✅ Cgroups already mounted"
+fi
 
 # Configure LBU (Local Backup Utility)
 cat > /etc/lbu/lbu.conf << 'LBU_CONF_EOF'
