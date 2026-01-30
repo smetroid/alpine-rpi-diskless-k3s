@@ -322,12 +322,8 @@ if [ -f /mnt/data/.system-initialized ]; then
     exit 0
 fi
 
-# Set up package repositories using version from YAML config
-ALPINE_VERSION=\$(echo "$(yaml_get "alpine.version")" | cut -d. -f1,2)
-cat > /etc/apk/repositories << REPOS
-http://dl-cdn.alpinelinux.org/alpine/v\${ALPINE_VERSION}/main
-http://dl-cdn.alpinelinux.org/alpine/v\${ALPINE_VERSION}/community
-REPOS
+# Note: /etc/apk/repositories is now created in the overlay during build time
+# (see create-apkovl-yaml.sh)
 
 # Update package index
 _logger "Updating package index"
