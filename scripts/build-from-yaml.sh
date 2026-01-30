@@ -597,8 +597,12 @@ if grep -q "^server:" /etc/k3s/config.yaml 2>/dev/null; then
     while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
         echo "   Attempting to retrieve token (attempt \$((RETRY_COUNT + 1))/\$MAX_RETRIES)..."
 
-        # SSH to master and get token
-        if TOKEN=\$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@\${MASTER_HOST} \
+        # SSH to master and get token using cluster SSH key
+        if TOKEN=\$(ssh -i /root/.ssh/cluster_id_rsa \
+                    -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=5 \
+                    root@\${MASTER_HOST} \
                 "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null); then
             if [ -n "\$TOKEN" ]; then
                 mkdir -p /etc/rancher/k3s
