@@ -145,7 +145,7 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE..."
     
     # Create directory structure
-    mkdir -p "${NODE_NAME}-apkovl"/{etc/{network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
+    mkdir -p "${NODE_NAME}-apkovl"/{etc/{apk,network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
 
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
@@ -192,7 +192,15 @@ nameserver ${DNS_SERVERS[0]}
 domain $DOMAIN
 search $DOMAIN
 EOF
-    
+
+    # APK repositories configuration
+    ALPINE_VERSION=$(yaml_get "alpine.version" "$CONFIG_FILE")
+    ALPINE_MAJOR=$(echo "$ALPINE_VERSION" | cut -d'.' -f1,2)
+    cat > "${NODE_NAME}-apkovl/etc/apk/repositories" << EOF
+http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/main
+http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/community
+EOF
+
     # SSH daemon configuration
     SSH_PORT=$(yaml_get "ssh.port")
     PERMIT_ROOT=$(yaml_get "ssh.permit_root_login")
