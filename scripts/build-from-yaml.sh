@@ -307,6 +307,9 @@ _logger() {
     fi
 }
 
+# Get k3s version from config for installation
+K3S_VERSION="$(yaml_get "cluster.k3s_version" "$CONFIG_FILE")"
+
 _logger "Starting Alpine diskless system initialization"
 
 # Create trash directory for tracking
@@ -579,7 +582,13 @@ fi
 echo "🚀 Installing k3s..."
 if [ ! -f /usr/local/bin/k3s ]; then
     _logger "Downloading and installing k3s"
-    echo "📥 Downloading k3s..."
+    echo "📥 Downloading k3s version \${K3S_VERSION}..."
+
+    # Set INSTALL_K3S_VERSION if specific version is configured
+    if [ -n "\${K3S_VERSION}" ] && [ "\${K3S_VERSION}" != "latest" ]; then
+        export INSTALL_K3S_VERSION="\${K3S_VERSION}"
+        echo "   Using version: \${K3S_VERSION}"
+    fi
 
     wget -qO- https://get.k3s.io | sh -
     if [ \$? -eq 0 ]; then
