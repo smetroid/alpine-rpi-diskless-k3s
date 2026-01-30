@@ -489,6 +489,8 @@ etc/sysctl.d/*
 etc/timezone
 etc/localtime
 etc/k3s
+etc/init.d/k3s
+etc/runlevels/default/k3s
 etc/lbu/lbu.conf
 etc/init.d/qemu-device-setup
 etc/runlevels/default/qemu-device-setup
