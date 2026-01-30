@@ -105,37 +105,7 @@ EOF
             fi
         done
 
-        # Master startup script (based on official k3s installer format)
-        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << EOF
-#!/sbin/openrc-run
-
-depend() {
-    after network-online
-    want cgroups
-    need storage-init
-}
-
-start_pre() {
-    rm -f /tmp/k3s.*
-}
-
-supervisor=supervise-daemon
-name=k3s
-command="/usr/local/bin/k3s"
-command_args="server --config /etc/k3s/config.yaml --token $K3S_TOKEN >>/var/log/k3s.log 2>&1"
-
-output_log=/var/log/k3s.log
-error_log=/var/log/k3s.log
-
-pidfile="/var/run/k3s.pid"
-respawn_delay=5
-respawn_max=0
-
-set -o allexport
-if [ -f /etc/environment ]; then . /etc/environment; fi
-if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
-set +o allexport
-EOF
+        # Note: k3s init script is created by the k3s installer, not in the overlay
 
     else
         # Find master node IP for agent configuration
@@ -161,43 +131,11 @@ server: $SERVER_URL
 node-ip: $NODE_IP
 EOF
 
-        # Agent startup script (based on official k3s installer format)
-        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << EOF
-#!/sbin/openrc-run
-
-depend() {
-    after network-online
-    want cgroups
-    need storage-init
-}
-
-start_pre() {
-    rm -f /tmp/k3s.*
-}
-
-supervisor=supervise-daemon
-name=k3s
-command="/usr/local/bin/k3s"
-command_args="agent --config /etc/k3s/config.yaml --token $K3S_TOKEN >>/var/log/k3s.log 2>&1"
-
-output_log=/var/log/k3s.log
-error_log=/var/log/k3s.log
-
-pidfile="/var/run/k3s.pid"
-respawn_delay=5
-respawn_max=0
-
-set -o allexport
-if [ -f /etc/environment ]; then . /etc/environment; fi
-if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
-set +o allexport
-EOF
+        # Note: k3s init script is created by the k3s installer, not in the overlay
     fi
-    
-    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
-    
-    # Add k3s to default runlevel
-    ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
+
+    # Note: k3s init script is created by the k3s installer during installation
+    # The k3s service will be enabled by the k3s_bootstrap script
     
     # Install k3s script
     K3S_VERSION=$(yaml_get "cluster.k3s_version")
