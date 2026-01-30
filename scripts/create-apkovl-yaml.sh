@@ -396,24 +396,10 @@ if [ ! -f /usr/local/bin/k3s ]; then
     _logger "Downloading and installing k3s"
     echo "📥 Downloading k3s..."
 
-    # Save our custom init script before k3s installer overwrites it
-    if [ -f /etc/init.d/k3s ]; then
-        cp /etc/init.d/k3s /tmp/k3s-init-custom
-        echo "📋 Saved custom k3s init script"
-    fi
-
     wget -qO- https://get.k3s.io | sh -
     if [ \$? -eq 0 ]; then
         echo "✅ k3s installed successfully"
         _logger "k3s installation completed successfully"
-
-        # Restore our custom init script (overrides the one from k3s installer)
-        if [ -f /tmp/k3s-init-custom ]; then
-            cp /tmp/k3s-init-custom /etc/init.d/k3s
-            chmod +x /etc/init.d/k3s
-            rm /tmp/k3s-init-custom
-            echo "📋 Restored custom k3s init script with storage-init dependency"
-        fi
     else
         echo "❌ k3s installation failed"
         _logger "k3s installation failed"
