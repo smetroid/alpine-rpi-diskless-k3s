@@ -11,6 +11,7 @@
 
 # Build outputs and generated files
 builds/
+builds-qemu/
 k3s-token.txt
 .worktrees/
 
