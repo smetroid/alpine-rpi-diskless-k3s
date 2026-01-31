@@ -285,7 +285,7 @@ create_data_disk() {
     local disk_file="$VM_DIR/${node_name}-data.qcow2"
 
     if [ ! -f "$disk_file" ]; then
-        echo "Creating data disk for $node_name..."
+        echo "Creating data disk for $node_name..." >&2
         qemu-img create -f qcow2 "$disk_file" 4G >/dev/null
     fi
     echo "$disk_file"
@@ -305,6 +305,10 @@ prepare_overlay() {
         exit 1
     fi
 
+    # Get node IP for dual NIC configuration
+    local node_ip
+    node_ip=$(get_node_ip "$node_name")
+
     # Clean and recreate overlay directory
     rm -rf "$overlay_subdir" "$temp_dir"
     mkdir -p "$overlay_subdir" "$temp_dir"
@@ -315,6 +319,26 @@ prepare_overlay() {
 
     # Add QEMU device setup service
     create_qemu_device_service "$temp_dir"
+
+    # Configure dual NICs for QEMU testing:
+    # - eth0: Cluster network (static IP, VM-to-VM via socket, NO gateway)
+    # - eth1: Host access network (DHCP via QEMU user mode, provides internet)
+    if [ -f etc/network/interfaces ]; then
+        cat > etc/network/interfaces << EOF
+auto lo
+iface lo inet loopback
+
+# Cluster network (VM-to-VM, static IP, no gateway)
+auto eth0
+iface eth0 inet static
+    address $node_ip
+    netmask 255.255.255.0
+
+# Host access network (QEMU user mode, DHCP, provides internet)
+auto eth1
+iface eth1 inet dhcp
+EOF
+    fi
 
     # Repack overlay (include all overlay directories)
     tar -czf "$overlay_subdir/${node_name}.apkovl.tar.gz" etc usr root var sbin lib 2>/dev/null || \
