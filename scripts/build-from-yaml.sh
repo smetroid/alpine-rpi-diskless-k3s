@@ -575,9 +575,25 @@ echo "4. Wait 5-10 minutes for complete cluster initialization"
 echo ""
 echo "Access your cluster:"
 
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
-    echo "  $NODE_ROLE: ssh root@$NODE_IP"
-done
+# Determine if this is a QEMU test config
+CONFIG_BASENAME="$(basename "$CONFIG_FILE")"
+case "$CONFIG_BASENAME" in
+    qemu.yaml|*-test.yaml|*-qemu.yaml)
+        # QEMU testing - show localhost:port access
+        yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+            # Calculate SSH port from IP last octet (10.99.0.15 -> 2215)
+            port=$(echo "$NODE_IP" | cut -d. -f4)
+            ssh_port=$((2200 + port))
+            echo "  $NODE_ROLE: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost -p $ssh_port"
+        done
+        ;;
+    *)
+        # Production - show direct IP access
+        yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+            echo "  $NODE_ROLE: ssh root@$NODE_IP"
+        done
+        ;;
+esac
 
 echo ""
 echo "Verify deployment: kubectl get nodes -o wide"
