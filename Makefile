@@ -23,11 +23,10 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod \
+.PHONY: help build validate clean clean-test clean-all setup-sd test test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
-        qemu-cluster qemu-cluster-stop qemu-cluster-status \
-        build-test build-qemu template list-apkovl list-apkovl-prod list-apkovl-test show-config \
-        qemu-test
+        qemu-cluster test-qemu \
+        build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config
 
 # Default target
 help:
@@ -41,7 +40,6 @@ help:
 	@echo "  make clean              Remove production build artifacts"
 	@echo "  make clean-test         Remove test build artifacts"
 	@echo "  make clean-all          Remove all artifacts (production + test vm dirs)"
-	@echo "  make template           Create partitioned disk template (saved to test/)"
 	@echo "  make list-apkovl        List all apkovl archives (both)"
 	@echo "  make list-apkovl-prod   List production apkovl archives"
 	@echo "  make list-apkovl-test   List test apkovl archives"
@@ -59,12 +57,6 @@ help:
 	@echo "  make test-cluster-stop    Stop all test VMs"
 	@echo "  make test-qemu          Build + boot with qemu.yaml (single node)"
 	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
-	@echo ""
-	@echo "QEMU Testing:"
-	@echo "  ./test/qemu-test.sh server        Start server (master) VM"
-	@echo "  ./test/qemu-test.sh worker <name> Start worker VM"
-	@echo "  ./test/qemu-test.sh status        Show running VMs"
-	@echo "  ./test/qemu-test.sh stop [all]    Stop VM(s)"
 	@echo ""
 	@echo "Configuration:"
 	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
@@ -131,12 +123,11 @@ endif
 # =============================================================================
 # Test Targets
 # =============================================================================
+# Test Targets
+# =============================================================================
 
-# Run full diskless boot simulation with QEMU
-test: qemu-test
-
-# Show QEMU test usage
-qemu-test:
+# Show QEMU test usage (directs to qemu-test.sh)
+test:
 	@echo "QEMU Test Script"
 	@echo "================="
 	@echo ""
@@ -156,7 +147,7 @@ qemu-test:
 # Full QEMU test workflow - build and boot test config (single node for quick testing)
 test-qemu: build-test
 	@echo "Running single-node QEMU test..."
-	./$(TEST_DIR)/qemu-test.sh server
+	CONFIG_FILE=qemu.yaml ./$(TEST_DIR)/qemu-test.sh server
 
 # Boot test with production config (for RPi hardware testing)
 test-prod:
@@ -192,14 +183,6 @@ qemu-cluster: build-test
 	@echo "Starting full k3s cluster with QEMU socket networking..."
 	@echo ""
 	./$(TEST_DIR)/launch-qemu-cluster.sh
-
-# QEMU Cluster - Stop all running cluster VMs
-qemu-cluster-stop:
-	@./$(TEST_DIR)/qemu-test.sh stop all
-
-# QEMU Cluster - Show status of cluster VMs
-qemu-cluster-status:
-	@./$(TEST_DIR)/qemu-test.sh status
 
 # =============================================================================
 # Clean Targets
