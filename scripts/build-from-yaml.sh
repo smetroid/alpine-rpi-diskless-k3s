@@ -75,178 +75,9 @@ echo ""
 echo "Step 3: Generating Kubernetes manifests from YAML..."
 "$SCRIPT_DIR/generate-manifests-yaml.sh"
 
-# Step 4: Setup persistence (reuse existing script)
+# Step 4: Finalize apkovl structure
 echo ""
-echo "Step 4: Setting up persistence scripts..."
-if [ -f "$SCRIPT_DIR/setup-persistence.sh" ]; then
-    # Adapt existing script to work with YAML-generated nodes
-    source "$LIB_DIR/yaml-parser.sh"
-    yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
-        if [ ! -d "${NODE_NAME}-apkovl" ]; then
-            echo "Warning: ${NODE_NAME}-apkovl directory not found"
-            continue
-        fi
-        
-        # Add Alpine configuration backup script
-        # Create OpenRC service for backing up configuration
-        cat > "${NODE_NAME}-apkovl/etc/init.d/config-backup" << 'EOF'
-#!/sbin/openrc-run
-
-description="Backup Alpine configuration to persistent storage"
-name="config backup"
-
-depend() {
-    need storage-init system-bootstrap
-    after storage-init system-bootstrap
-    provide config-backup
-}
-
-start() {
-    ebegin "Backing up Alpine configuration to persistent storage"
-    
-    # Wait for storage to be ready
-    if [ ! -d /mnt/data ]; then
-        eerror "Persistent storage not available at /mnt/data"
-        eend 1 "Storage not mounted"
-        return 1
-    fi
-    
-    # Create backup directories
-    mkdir -p /mnt/data/alpine-backup/{etc,root}
-    
-    # System configuration
-    einfo "Backing up system configuration..."
-    cp -f /etc/hostname /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-    cp -f /etc/resolv.conf /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-    cp -rf /etc/network /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-    cp -rf /etc/ssh /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-    
-    # Root user files - CRITICAL for SSH access
-    einfo "Backing up SSH configuration..."
-    if [ -d /root/.ssh ]; then
-        cp -rf /root/.ssh /mnt/data/alpine-backup/root/ 2>/dev/null || true
-        # Verify the backup was successful
-        if [ -f /mnt/data/alpine-backup/root/.ssh/authorized_keys ]; then
-            einfo "SSH authorized_keys backed up successfully"
-        else
-            ewarn "SSH authorized_keys backup may have failed"
-        fi
-    else
-        ewarn "No /root/.ssh directory found to backup"
-    fi
-    
-    # K3s configuration
-    if [ -d /etc/k3s ]; then
-        einfo "Backing up k3s configuration..."
-        cp -rf /etc/k3s /mnt/data/alpine-backup/etc/ 2>/dev/null || true
-    fi
-    
-    # Ensure backup timestamp
-    echo "$(date): Configuration backup completed" > /mnt/data/alpine-backup/.backup-timestamp
-    
-    sync
-    eend 0 "Configuration backup completed"
-}
-
-stop() {
-    ebegin "Stopping config backup service"
-    eend 0
-}
-EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/init.d/config-backup"
-        
-        
-        # Create OpenRC service for restoring configuration
-        cat > "${NODE_NAME}-apkovl/etc/init.d/config-restore" << 'EOF'
-#!/sbin/openrc-run
-
-description="Restore Alpine configuration from persistent storage"
-name="config restore"
-
-depend() {
-    need storage-init
-    after storage-init
-    before system-bootstrap
-    provide config-restore
-}
-
-start() {
-    ebegin "Restoring Alpine configuration from persistent storage"
-    
-    # Wait for storage to be ready
-    if [ ! -d /mnt/data ]; then
-        eerror "Persistent storage not available at /mnt/data"
-        eend 1 "Storage not mounted"
-        return 1
-    fi
-    
-    if [ -d /mnt/data/alpine-backup ]; then
-        einfo "Found configuration backup, restoring..."
-        
-        # Restore system configuration
-        cp -rf /mnt/data/alpine-backup/etc/* /etc/ 2>/dev/null || true
-        cp -rf /mnt/data/alpine-backup/root/* /root/ 2>/dev/null || true
-        
-        # Set proper permissions for SSH
-        if [ -f /root/.ssh/authorized_keys ]; then
-            chmod 700 /root/.ssh 2>/dev/null || true
-            chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
-            chown root:root /root/.ssh/authorized_keys 2>/dev/null || true
-            einfo "SSH authorized_keys restored and permissions set"
-        fi
-        
-        # Set SSH host key permissions
-        chmod 600 /etc/ssh/ssh_host_* 2>/dev/null || true
-        
-        eend 0 "Configuration restored successfully"
-    else
-        einfo "No configuration backup found, using overlay defaults"
-        eend 0 "Using default configuration"
-    fi
-}
-
-stop() {
-    ebegin "Stopping config restore service"
-    eend 0
-}
-EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/init.d/config-restore"
-        
-        
-        # Create additional system configuration files
-        cat > "${NODE_NAME}-apkovl/etc/modules" << 'EOF'
-# Kernel modules needed for k3s
-br_netfilter
-overlay
-nf_conntrack
-xt_conntrack
-xt_MASQUERADE
-iptable_nat
-iptable_filter
-ip_tables
-EOF
-
-        cat > "${NODE_NAME}-apkovl/etc/sysctl.d/k3s.conf" << 'EOF'
-# Kubernetes/k3s sysctl settings
-net.bridge.bridge-nf-call-iptables = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward = 1
-vm.overcommit_memory = 1
-kernel.panic = 10
-kernel.panic_on_oops = 1
-fs.inotify.max_user_watches = 524288
-fs.inotify.max_user_instances = 512
-EOF
-
-    done
-    echo "✅ Persistence scripts configured"
-else
-    echo "⚠️  setup-persistence.sh not found, skipping..."
-fi
-
-# Step 5: Finalize apkovl structure
-echo ""
-echo "Step 5: Finalizing apkovl structure..."
+echo "Step 4: Finalizing apkovl structure..."
 
 # Load YAML configuration
 source "$LIB_DIR/yaml-parser.sh"
@@ -697,9 +528,9 @@ EOF
     # Note: apkovl archives will be created by create-apkovl-archives.sh
 done
 
-# Step 6: Create apkovl archives
+# Step 5: Create apkovl archives
 echo ""
-echo "Step 6: Creating apkovl archives..."
+echo "Step 5: Creating apkovl archives..."
 "$SCRIPT_DIR/create-apkovl-archives.sh" "$CONFIG_FILE"
 
 # Create summary information
