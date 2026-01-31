@@ -56,15 +56,14 @@ QEMU Virtual Machine
 
 ## Testing Modes
 
-### DHCP Mode (Default - Easiest for Development)
+### Single-Node Testing
 ```bash
 # Simple testing with automatic networking
-./test/test-alpine-diskless-boot.sh
+./test/qemu-test.sh server
 
 # Access via port forwarding:
-ssh root@localhost -p 2222        # SSH access
+ssh root@localhost -p 2221        # SSH access (port varies by node IP)
 curl localhost:6443               # k3s API
-curl localhost:8080               # Web services
 ```
 
 **Best for:**
@@ -72,19 +71,16 @@ curl localhost:8080               # Web services
 - Service testing
 - Configuration validation
 
-### Bridge Mode (Advanced - Realistic Network Testing)
+### Multi-Node Cluster Testing
 ```bash
-# Setup host bridge first
-sudo ip link add br0 type bridge
-sudo ip addr add 192.168.1.254/24 dev br0
-sudo ip link set br0 up
+# Terminal 1: Start server
+./test/qemu-test.sh server
 
-# Run test with bridge networking
-NETWORK_MODE=bridge ./test/test-alpine-diskless-boot.sh
+# Terminal 2: Start first worker
+./test/qemu-test.sh worker qemu-2
 
-# Access via actual IP:
-ssh root@192.168.1.21          # Direct SSH
-curl https://192.168.1.21:6443 # k3s API
+# Terminal 3: Start second worker
+./test/qemu-test.sh worker qemu-3
 ```
 
 **Best for:**
@@ -92,6 +88,22 @@ curl https://192.168.1.21:6443 # k3s API
 - Network policy testing
 - Load balancer testing
 - Production-like scenarios
+
+### Using Make Targets
+```bash
+# Show test usage
+make test
+
+# Start server
+make test-server
+
+# Start worker
+make test-worker NODE=qemu-2
+
+# Show status / stop VMs
+make test-cluster-status
+make test-cluster-stop
+```
 
 ## What Gets Tested
 
@@ -121,24 +133,28 @@ curl https://192.168.1.21:6443 # k3s API
 
 ### 1. **Development Phase**
 ```bash
-# Quick iteration testing
-./build-from-yaml.sh k3s.yaml
-./test/test-alpine-diskless-boot.sh
-# Test SSH, k3s, services
+# Build configuration
+make build-test
+
+# Single-node test
+./test/qemu-test.sh server
+# Or: make test-qemu
 ```
 
-### 2. **Integration Testing**
+### 2. **Multi-Node Cluster Testing**
 ```bash
-# Multi-node simulation (bridge mode)
-NETWORK_MODE=bridge ./test/test-alpine-diskless-boot.sh
-# Test cluster formation, networking
+# Terminal 1: Start server
+./test/qemu-test.sh server
+
+# Terminal 2-3: Start workers
+./test/qemu-test.sh worker qemu-2
+./test/qemu-test.sh worker qemu-3
 ```
 
 ### 3. **Physical Deployment**
 ```bash
 # Deploy to actual hardware
-sudo ./setup-sd-card.sh /dev/diskN k3s.yaml
-# Copy .apkovl files to SD cards
+make setup-sd DEVICE=/dev/sdX NODE=k3s-21
 # Boot physical Raspberry Pi nodes
 ```
 
@@ -163,23 +179,24 @@ sudo ./setup-sd-card.sh /dev/diskN k3s.yaml
 
 ## Improving Test Coverage
 
-### Current Test Script Enhancements Needed
+### Test Script Features
 
-1. **Multi-Node Testing**: Current script tests single node
-2. **ARM64 Emulation**: Could use ARM64 QEMU for better accuracy
-3. **Real Network Testing**: Limited network scenario testing
-4. **Storage Performance**: No SD card performance simulation
-5. **Hardware Feature Testing**: No GPIO/hardware specific testing
+The unified `qemu-test.sh` script supports:
+1. **Single-Node Testing**: Boot just the server node
+2. **Multi-Node Testing**: Boot full cluster with server + workers
+3. **Socket Networking**: VM-to-VM communication for cluster testing
+4. **Management Commands**: Status and stop commands for VM control
+
+### Future Enhancements
+
+1. **ARM64 Emulation**: Could use ARM64 QEMU for better accuracy
+2. **Real Network Testing**: Bridge mode for production-like networking
+3. **Storage Performance**: No SD card performance simulation
+4. **Hardware Feature Testing**: No GPIO/hardware specific testing
 
 ### Suggested Improvements
 
-#### 1. **Add Multi-Node Testing Support**
-```bash
-# Test multiple nodes in same network
-NODES=3 ./test/test-multi-node-boot.sh
-```
-
-#### 2. **ARM64 Testing Mode**
+#### 1. **ARM64 Testing Mode**
 ```bash
 # Test with ARM64 emulation (slower but more accurate)
 ARCH=aarch64 ./test/test-alpine-diskless-boot.sh

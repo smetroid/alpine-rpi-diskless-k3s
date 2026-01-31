@@ -26,7 +26,8 @@ UNAME := $(shell uname)
 .PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
         qemu-cluster qemu-cluster-stop qemu-cluster-status \
-        build-test build-qemu template list-apkovl list-apkovl-prod list-apkovl-test show-config
+        build-test build-qemu template list-apkovl list-apkovl-prod list-apkovl-test show-config \
+        qemu-test
 
 # Default target
 help:
@@ -49,23 +50,21 @@ help:
 	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
 	@echo "                          Setup SD card for a specific node"
 	@echo ""
-	@echo "Test Targets (Single Node):"
-	@echo "  make test               Run QEMU boot test with qemu.yaml"
-	@echo "  make test-boot          Same as 'make test'"
-	@echo "  make test-qemu          Build + boot with qemu.yaml"
-	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
-	@echo ""
-	@echo "Test Targets (Multi-Node Cluster):"
+	@echo "Test Targets (QEMU Testing):"
+	@echo "  make test               Show qemu-test.sh usage"
 	@echo "  make test-server        Start k3s server VM (run first, in terminal 1)"
-	@echo "  make test-worker NODE=k3s-22"
+	@echo "  make test-worker NODE=qemu-2"
 	@echo "                          Start worker VM (run after server, in terminal 2)"
 	@echo "  make test-cluster-status  Show running test VMs"
 	@echo "  make test-cluster-stop    Stop all test VMs"
+	@echo "  make test-qemu          Build + boot with qemu.yaml (single node)"
+	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
 	@echo ""
-	@echo "QEMU Cluster (Socket Networking):"
-	@echo "  make qemu-cluster       Start all nodes in background (socket networking)"
-	@echo "  make qemu-cluster-status  Show running cluster VMs"
-	@echo "  make qemu-cluster-stop    Stop all cluster VMs"
+	@echo "QEMU Testing:"
+	@echo "  ./test/qemu-test.sh server        Start server (master) VM"
+	@echo "  ./test/qemu-test.sh worker <name> Start worker VM"
+	@echo "  ./test/qemu-test.sh status        Show running VMs"
+	@echo "  ./test/qemu-test.sh stop [all]    Stop VM(s)"
 	@echo ""
 	@echo "Configuration:"
 	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
@@ -134,22 +133,35 @@ endif
 # =============================================================================
 
 # Run full diskless boot simulation with QEMU
-test: test-boot
+test: qemu-test
 
-# Boot test - uses qemu.yaml by default for QEMU testing
-test-boot:
-	@echo "Running Alpine diskless boot simulation with qemu.yaml..."
-	./$(TEST_DIR)/test-qemu.sh qemu.yaml
+# Show QEMU test usage
+qemu-test:
+	@echo "QEMU Test Script"
+	@echo "================="
+	@echo ""
+	@echo "Usage:"
+	@echo "  ./test/qemu-test.sh server              # Boot master node"
+	@echo "  ./test/qemu-test.sh worker <node-name>  # Boot worker node"
+	@echo "  ./test/qemu-test.sh status              # Show running VMs"
+	@echo "  ./test/qemu-test.sh stop [all]          # Stop VM(s)"
+	@echo ""
+	@echo "Make targets:"
+	@echo "  make test-server              Boot server (master) VM"
+	@echo "  make test-worker NODE=<name>   Boot worker VM"
+	@echo "  make test-cluster-status       Show running VMs"
+	@echo "  make test-cluster-stop         Stop all VMs"
+	@echo ""
 
-# Full QEMU test workflow - build and boot test config
+# Full QEMU test workflow - build and boot test config (single node for quick testing)
 test-qemu: build-test
-	@echo "Running QEMU test boot..."
-	./$(TEST_DIR)/test-qemu.sh qemu.yaml
+	@echo "Running single-node QEMU test..."
+	./$(TEST_DIR)/qemu-test.sh server
 
 # Boot test with production config (for RPi hardware testing)
 test-prod:
-	@echo "Running Alpine diskless boot simulation with k3s.yaml..."
-	./$(TEST_DIR)/test-qemu.sh k3s.yaml
+	@echo "Running QEMU test with production config..."
+	CONFIG_FILE=k3s.yaml ./$(TEST_DIR)/qemu-test.sh server
 
 # -----------------------------------------------------------------------------
 # Multi-Node Cluster Testing
@@ -159,23 +171,23 @@ test-prod:
 test-server:
 	@echo "Starting k3s server VM..."
 	@echo "Wait for k3s to initialize (~2-3 min) before starting workers."
-	./$(TEST_DIR)/test-multinode.sh server
+	./$(TEST_DIR)/qemu-test.sh server
 
 # Start a worker VM - run this after server is ready, in a separate terminal
 test-worker:
 	@echo "Starting k3s worker VM: $(NODE)..."
-	./$(TEST_DIR)/test-multinode.sh worker $(NODE)
+	./$(TEST_DIR)/qemu-test.sh worker $(NODE)
 
 # Show status of running test VMs
 test-cluster-status:
-	@./$(TEST_DIR)/test-multinode.sh status
+	@./$(TEST_DIR)/qemu-test.sh status
 
 # Stop all test VMs
 test-cluster-stop:
-	@./$(TEST_DIR)/test-multinode.sh stop all
+	@./$(TEST_DIR)/qemu-test.sh stop all
 
 # QEMU Cluster - Start all nodes with socket networking (VM-to-VM communication)
-# Uses launch-qemu-cluster.sh which orchestrates test-multinode.sh
+# Uses launch-qemu-cluster.sh which orchestrates qemu-test.sh
 qemu-cluster: build-test
 	@echo "Starting full k3s cluster with QEMU socket networking..."
 	@echo ""
@@ -183,11 +195,11 @@ qemu-cluster: build-test
 
 # QEMU Cluster - Stop all running cluster VMs
 qemu-cluster-stop:
-	@./$(TEST_DIR)/test-multinode.sh stop all
+	@./$(TEST_DIR)/qemu-test.sh stop all
 
 # QEMU Cluster - Show status of cluster VMs
 qemu-cluster-status:
-	@./$(TEST_DIR)/test-multinode.sh status
+	@./$(TEST_DIR)/qemu-test.sh status
 
 # =============================================================================
 # Clean Targets

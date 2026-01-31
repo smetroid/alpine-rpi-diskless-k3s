@@ -133,60 +133,47 @@ make validate CONFIG=my-cluster.yaml
 
 ### Testing
 
-The project provides two testing approaches for different use cases:
-
-#### Single VM Testing
-Use this to validate build scripts and apkovl overlays quickly:
+The project provides unified QEMU testing for both single and multi-node scenarios:
 
 ```bash
 # Build test overlays
 make build-test
 
-# Boot single VM (uses qemu.yaml configuration)
-./test/test-qemu.sh qemu.yaml
+# Single-node test (just the server)
+./test/qemu-test.sh server
 
-# Or use make recipe
-make test
+# Multi-node cluster - run in separate terminals
+./test/qemu-test.sh server           # Terminal 1
+./test/qemu-test.sh worker qemu-2    # Terminal 2
+./test/qemu-test.sh worker qemu-3    # Terminal 3
+
+# Management commands
+./test/qemu-test.sh status
+./test/qemu-test.sh stop all
 ```
 
-This boots a single VM with minimal resources to verify:
-- Overlay generation works correctly
-- System bootstrap completes
-- k3s installs and starts properly
-
-#### QEMU Cluster Testing
-Use this to test multi-node cluster formation with socket networking:
-
+Or use Make targets:
 ```bash
-# Build and start full cluster (master + workers)
-make qemu-cluster
-
-# Check cluster status
-make qemu-cluster-status
-
-# Stop all cluster VMs
-make qemu-cluster-stop
+make test-server              # Start server VM
+make test-worker NODE=qemu-2  # Start worker VM
+make test-cluster-status      # Show running VMs
+make test-cluster-stop        # Stop all VMs
 ```
 
-The cluster testing creates:
-- VM-to-VM network on `10.99.0.x` subnet (socket networking)
-- SSH access via `10.0.2.x` addresses (QEMU user networking)
-- Per-node log files in `test/qemu-cluster/` (gitignored)
-
-To access the cluster:
+**Access the cluster:**
 ```bash
-# SSH to master node
-ssh -p 2222 root@localhost
+# SSH to a node (port varies by IP: 10.99.0.21 -> 2221)
+ssh -p 2221 root@localhost
 
 # Verify cluster
 kubectl get nodes
 kubectl get pods -A
 ```
 
-**Note**: Cluster VMs store k3s data in qcow2 files that persist across reboots. To perform a clean test:
+**Clean test data:**
 ```bash
-make clean-test  # Remove test build artifacts
-rm -rf test/qemu-cluster/*.qcow2  # Wipe data disks
+make clean-test           # Remove test build artifacts
+rm -rf test/qemu-cluster  # Wipe VM data disks
 ```
 
 ## Key Architecture Principles
