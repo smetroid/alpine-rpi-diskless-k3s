@@ -597,13 +597,13 @@ Test the boot process without real hardware:
 
 ```bash
 # First boot test (creates partitions, installs everything)
-./test/test-alpine-diskless-boot.sh
+./test/qemu-test.sh server
 
 # Inside VM, reboot to test restoration
 reboot
 
 # Verify SSH keys persist
-ssh root@localhost -p 2222
+ssh root@localhost -p 2221
 cat /etc/ssh/ssh_host_rsa_key.pub
 # Key should be the same after reboot!
 ```
@@ -793,8 +793,11 @@ Before deploying to physical Raspberry Pis, test your configuration with QEMU si
 ### Basic Test
 
 ```bash
-# Test Alpine diskless boot process
-./test/test-alpine-diskless-boot.sh
+# Build test configuration first
+make build-test
+
+# Test Alpine diskless boot process (single node)
+./test/qemu-test.sh server
 ```
 
 This simulates the exact boot process of a Raspberry Pi:
@@ -823,43 +826,49 @@ For faster iterations, create a reusable partitioned disk template:
 **One-time setup:**
 ```bash
 # Run first boot (partitions and formats disk)
-./test/test-alpine-diskless-boot.sh
+./test/qemu-test.sh server
 
 # After boot completes, save template
-cd test/vm-diskless
-cp data.qcow2 data-partitioned-template.qcow2
+cd test/qemu-cluster
+cp <node>-data.qcow2 data-partitioned-template.qcow2
 ```
 
 **Every test run:**
+The script will automatically use the template if it exists.
+
+### Multi-Node Cluster Testing
+
+Test a full cluster with multiple nodes:
+
 ```bash
-# Clean start
-rm -f test/vm-diskless/data.qcow2
+# Terminal 1: Start server
+./test/qemu-test.sh server
 
-# Run test - automatically uses template
-./test/test-alpine-diskless-boot.sh
+# Terminal 2: Start first worker
+./test/qemu-test.sh worker qemu-2
+
+# Terminal 3: Start second worker
+./test/qemu-test.sh worker qemu-3
 ```
-
-Benefits:
-- ✅ No partitioning/formatting on each boot
-- ✅ Mount works immediately
-- ✅ Faster test iterations
-- ✅ Avoids first-boot timing issues
 
 ### Test Modes
 
 ```bash
-# DHCP mode (default)
-./test/test-alpine-diskless-boot.sh
+# Socket networking (default - for multi-node clusters)
+./test/qemu-test.sh server
+
+# DHCP mode (single node, for quick testing)
+NETWORK_MODE=dhcp ./test/qemu-test.sh server
 
 # Bridge mode (requires host bridge setup)
-NETWORK_MODE=bridge ./test/test-alpine-diskless-boot.sh
+NETWORK_MODE=bridge ./test/qemu-test.sh server
 ```
 
 ### Accessing Test VM
 
 ```bash
-# SSH (DHCP mode)
-ssh root@localhost -p 2222
+# SSH (port varies by node IP - 10.99.0.21 -> 2221, etc.)
+ssh root@localhost -p 2221
 
 # k3s API
 curl -k https://localhost:6443

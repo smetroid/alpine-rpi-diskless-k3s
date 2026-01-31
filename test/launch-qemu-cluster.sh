@@ -5,7 +5,7 @@
 #
 # Usage: ./test/launch-cluster.sh
 #
-# This script orchestrates test-multinode.sh to start all nodes:
+# This script orchestrates qemu-test.sh to start all nodes:
 # 1. Master starts first, waits 60s for k3s initialization
 # 2. Workers start in parallel in background
 # 3. All output logged to test/vm-multinode/{nodename}.log
@@ -63,7 +63,7 @@ for node in "${NODES[@]}"; do
     IFS=':' read -r name ip role <<< "$node"
     if [ "$role" = "master" ]; then
         echo "Starting master: $name"
-        "$TEST_DIR/test-multinode.sh" server > "$VM_DIR/${name}.log" 2>&1 &
+        "$TEST_DIR/qemu-test.sh" server > "$VM_DIR/${name}.log" 2>&1 &
         MASTER_PID=$!
         echo "  Master PID: $MASTER_PID"
         echo "  Log: $VM_DIR/${name}.log"
@@ -88,7 +88,7 @@ for node in "${NODES[@]}"; do
     IFS=':' read -r name ip role <<< "$node"
     if [ "$role" != "master" ]; then
         echo "Starting worker: $name"
-        "$TEST_DIR/test-multinode.sh" worker "$name" > "$VM_DIR/${name}.log" 2>&1 &
+        "$TEST_DIR/qemu-test.sh" worker "$name" > "$VM_DIR/${name}.log" 2>&1 &
         WORKER_PID=$!
         echo "  Worker PID: $WORKER_PID"
         echo "  Log: $VM_DIR/${name}.log"
