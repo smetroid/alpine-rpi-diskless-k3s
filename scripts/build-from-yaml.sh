@@ -593,11 +593,12 @@ if [ ! -f /usr/local/bin/k3s ]; then
     fi
 
     wget -qO- https://get.k3s.io | sh -
-    if [ \$? -eq 0 ]; then
+    K3S_INSTALL_STATUS=\$?
+    if [ \$K3S_INSTALL_STATUS -eq 0 ] || [ -x /usr/local/bin/k3s ]; then
         echo "✅ k3s installed successfully"
         _logger "k3s installation completed successfully"
     else
-        echo "❌ k3s installation failed"
+        echo "❌ k3s installation failed (exit code: \$K3S_INSTALL_STATUS)"
         _logger "k3s installation failed"
         exit 1
     fi
@@ -609,9 +610,32 @@ fi
 echo "🔄 Starting k3s service..."
 if [ -f /etc/k3s/config.yaml ]; then
     _logger "Starting k3s with configuration"
-    rc-service k3s start
-    rc-update add k3s default
-    echo "✅ k3s service started and enabled"
+
+    # Check if this is a worker node (config has server: URL)
+    if grep -q "^server:" /etc/k3s/config.yaml 2>/dev/null; then
+        echo "🔧 Worker node detected - configuring k3s for agent mode"
+
+        # Check if k3s is already running and was started as server
+        if rc-service k3s status 2>/dev/null | grep -q "started"; then
+            # Stop k3s if it's running with wrong mode
+            echo "  Stopping k3s to reconfigure for agent mode..."
+            rc-service k3s stop 2>/dev/null || true
+            sleep 2
+        fi
+
+        # Modify k3s init script to use agent instead of server
+        sed -i 's/command_args="server/command_args="agent/' /etc/init.d/k3s
+        echo "  ✅ k3s service configured for agent mode"
+    fi
+
+    # Start k3s if not already running
+    if ! rc-service k3s status 2>/dev/null | grep -q "started"; then
+        rc-service k3s start
+        rc-update add k3s default
+        echo "✅ k3s service started and enabled"
+    else
+        echo "✅ k3s service already running"
+    fi
 else
     echo "⚠️ No k3s configuration found - k3s not started"
 fi

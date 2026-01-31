@@ -8,6 +8,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
 
+# Set config file before loading yaml-parser (which sets its own default)
+CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
+
 if [ -f "$LIB_DIR/logging.sh" ]; then
     . "$LIB_DIR/logging.sh"
 else
@@ -18,10 +21,8 @@ else
     log_success() { echo "[SUCCESS] $*"; }
 fi
 
-# Load YAML parser
+# Load YAML parser (after CONFIG_FILE is set)
 source "$LIB_DIR/yaml-parser.sh"
-
-CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
 log_info "=== Alpine k3s Configuration Validator ==="
 log_info "Validating: $CONFIG_FILE"

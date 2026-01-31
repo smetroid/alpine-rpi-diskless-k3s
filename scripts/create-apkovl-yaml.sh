@@ -405,7 +405,7 @@ start() {
     # Format if needed
     if [ -b "$DATA_PARTITION" ] && ! blkid $DATA_PARTITION | grep -q ext4; then
         einfo "Formatting data partition..."
-        if mkfs.ext4 -F -L DATA $DATA_PARTITION; then
+        if /sbin/mkfs.ext4 -F -L DATA $DATA_PARTITION; then
             einfo "Data partition formatted successfully"
 
             # CRITICAL: Aggressive sync - wait for kernel to recognize filesystem
@@ -841,6 +841,13 @@ start() {
                 mkdir -p /etc/rancher/k3s
                 echo "${TOKEN}" > "${TOKEN_FILE}"
                 chmod 600 "${TOKEN_FILE}"
+                # Add token to the existing rancher k3s config
+                # Config is already at /etc/rancher/k3s/config.yaml from setup-k3s-yaml.sh
+                mkdir -p /etc/rancher/k3s
+                # Add token if not already present
+                if ! grep -q "^token:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
+                    echo "token: ${TOKEN}" >> /etc/rancher/k3s/config.yaml
+                fi
                 eend 0 "Token retrieved successfully"
                 return 0
             fi

@@ -62,6 +62,11 @@ help:
 	@echo "  make test-cluster-status  Show running test VMs"
 	@echo "  make test-cluster-stop    Stop all test VMs"
 	@echo ""
+	@echo "QEMU Cluster (Socket Networking):"
+	@echo "  make qemu-cluster       Start all nodes in background (socket networking)"
+	@echo "  make qemu-cluster-status  Show running cluster VMs"
+	@echo "  make qemu-cluster-stop    Stop all cluster VMs"
+	@echo ""
 	@echo "Configuration:"
 	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
 	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-21)"
@@ -173,6 +178,30 @@ test-cluster-status:
 # Stop all test VMs
 test-cluster-stop:
 	@./$(TEST_DIR)/test-multinode.sh stop all
+
+# QEMU Cluster - Start all nodes with socket networking (VM-to-VM communication)
+# Uses launch-cluster.sh which orchestrates test-multinode.sh
+qemu-cluster: build-test
+	@echo "Starting full k3s cluster with QEMU socket networking..."
+	@echo ""
+	./$(TEST_DIR)/launch-cluster.sh
+
+# QEMU Cluster - Start specific node by index (1-based)
+qemu-node: build-test
+	@if [ -z "$(NODE)" ]; then \
+		echo "Usage: make qemu-node NODE=<index>"; \
+		echo "Example: make qemu-node NODE=1  # Start first node"; \
+		exit 1; \
+	fi
+	./$(TEST_DIR)/test-alpine-cluster.sh qemu.yaml $(NODE)
+
+# QEMU Cluster - Stop all running cluster VMs
+qemu-cluster-stop:
+	@./$(TEST_DIR)/test-multinode.sh stop all
+
+# QEMU Cluster - Show status of cluster VMs
+qemu-cluster-status:
+	@./$(TEST_DIR)/test-multinode.sh status
 
 # =============================================================================
 # Clean Targets

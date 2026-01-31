@@ -50,19 +50,19 @@ fi
 # Process each node
 yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Setting up K3s configuration for $NODE_NAME ($NODE_ROLE)..."
-    
-    # Create K3s directory if not exists
-    mkdir -p "${NODE_NAME}-apkovl/etc/k3s"
-    
+
+    # Create K3s rancher directory if not exists (k3s reads from /etc/rancher/k3s/)
+    mkdir -p "${NODE_NAME}-apkovl/etc/rancher/k3s"
+
     if [ "$NODE_ROLE" = "master" ]; then
         # Master node configuration
         # When using external datastore (PostgreSQL/MySQL), do NOT use cluster-init
         # All servers coordinate via the external datastore instead
         if [ -n "$DATASTORE_ENDPOINT" ]; then
             # HA with external datastore
-            cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
+            cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
 write-kubeconfig-mode: "0644"
-bind-address: 0.0.0.0
+bind-address: $NODE_IP
 advertise-address: $NODE_IP
 node-ip: $NODE_IP
 cluster-cidr: "$CLUSTER_CIDR"
@@ -73,10 +73,10 @@ EOF
             echo "# HA mode: External datastore enabled"
         else
             # Embedded database (SQLite) with cluster-init
-            cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
+            cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
 write-kubeconfig-mode: "0644"
 cluster-init: true
-bind-address: 0.0.0.0
+bind-address: $NODE_IP
 advertise-address: $NODE_IP
 node-ip: $NODE_IP
 cluster-cidr: "$CLUSTER_CIDR"
@@ -88,9 +88,9 @@ EOF
 
         # Add disable services
         if [ ${#DISABLE_SERVICES[@]} -gt 0 ]; then
-            echo "disable:" >> "${NODE_NAME}-apkovl/etc/k3s/config.yaml"
+            echo "disable:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             for service in "${DISABLE_SERVICES[@]}"; do
-                echo "  - $service" >> "${NODE_NAME}-apkovl/etc/k3s/config.yaml"
+                echo "  - $service" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             done
         fi
 
@@ -99,8 +99,8 @@ EOF
             node_info=($(echo "$node_line" | tr ':' ' '))
             if [ "${node_info[0]}" = "$NODE_NAME" ] && [ "${node_info[2]}" = "master" ]; then
                 # Check for taints in the YAML (this would need more complex parsing)
-                echo "node-taint:" >> "${NODE_NAME}-apkovl/etc/k3s/config.yaml"
-                echo "  - \"CriticalAddonsOnly=true:NoExecute\"" >> "${NODE_NAME}-apkovl/etc/k3s/config.yaml"
+                echo "node-taint:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
+                echo "  - \"CriticalAddonsOnly=true:NoExecute\"" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
                 break
             fi
         done
@@ -126,7 +126,7 @@ EOF
         fi
 
         # Agent node configuration
-        cat > "${NODE_NAME}-apkovl/etc/k3s/config.yaml" << EOF
+        cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
 server: $SERVER_URL
 node-ip: $NODE_IP
 EOF
