@@ -578,7 +578,7 @@ else
     echo "⚠️  Bridge networking not available - k3s may have limited functionality"
 fi
 
-# Note: k3s bind mounts (/etc/k3s, /var/lib/rancher/k3s) are set up by storage-init service
+# Note: k3s bind mounts (/etc/rancher/k3s, /var/lib/rancher/k3s) are set up by storage-init service
 
 # Install k3s if not present
 echo "🚀 Installing k3s..."
@@ -608,11 +608,11 @@ fi
 
 # Start k3s service
 echo "🔄 Starting k3s service..."
-if [ -f /etc/k3s/config.yaml ]; then
+if [ -f /etc/rancher/k3s/config.yaml ]; then
     _logger "Starting k3s with configuration"
 
     # Check if this is a worker node (config has server: URL)
-    if grep -q "^server:" /etc/k3s/config.yaml 2>/dev/null; then
+    if grep -q "^server:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
         echo "🔧 Worker node detected - configuring k3s for agent mode"
 
         # Check if k3s is already running and was started as server

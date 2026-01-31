@@ -36,7 +36,7 @@ if [ ${#NODES[@]} -eq 0 ]; then
 fi
 
 # Create log directory
-VM_DIR="$TEST_DIR/vm-multinode"
+VM_DIR="$TEST_DIR/qemu-cluster"
 mkdir -p "$VM_DIR"
 
 echo "============================================"
