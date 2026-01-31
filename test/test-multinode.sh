@@ -15,7 +15,7 @@ set -e
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$TEST_DIR")"
-VM_DIR="$TEST_DIR/vm-multinode"
+VM_DIR="$TEST_DIR/qemu-cluster"
 OVERLAY_DIR="$VM_DIR/overlays"
 
 # Configuration - must export CONFIG_FILE BEFORE sourcing yaml-parser

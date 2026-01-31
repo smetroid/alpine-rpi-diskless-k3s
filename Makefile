@@ -23,8 +23,9 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod test-logging \
+.PHONY: help build validate clean clean-test clean-all setup-sd test test-boot test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
+        qemu-cluster qemu-cluster-stop qemu-cluster-status \
         build-test build-qemu template list-apkovl list-apkovl-prod list-apkovl-test show-config
 
 # Default target
@@ -53,7 +54,6 @@ help:
 	@echo "  make test-boot          Same as 'make test'"
 	@echo "  make test-qemu          Build + boot with qemu.yaml"
 	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
-	@echo "  make test-logging       Run logging tests"
 	@echo ""
 	@echo "Test Targets (Multi-Node Cluster):"
 	@echo "  make test-server        Start k3s server VM (run first, in terminal 1)"
@@ -139,22 +139,17 @@ test: test-boot
 # Boot test - uses qemu.yaml by default for QEMU testing
 test-boot:
 	@echo "Running Alpine diskless boot simulation with qemu.yaml..."
-	./$(TEST_DIR)/test-alpine-diskless-boot.sh qemu.yaml
+	./$(TEST_DIR)/test-qemu.sh qemu.yaml
 
 # Full QEMU test workflow - build and boot test config
 test-qemu: build-test
 	@echo "Running QEMU test boot..."
-	./$(TEST_DIR)/test-alpine-diskless-boot.sh qemu.yaml
+	./$(TEST_DIR)/test-qemu.sh qemu.yaml
 
 # Boot test with production config (for RPi hardware testing)
 test-prod:
 	@echo "Running Alpine diskless boot simulation with k3s.yaml..."
-	./$(TEST_DIR)/test-alpine-diskless-boot.sh k3s.yaml
-
-# Run logging tests
-test-logging:
-	@echo "Running logging tests..."
-	./$(TEST_DIR)/test-logging.sh
+	./$(TEST_DIR)/test-qemu.sh k3s.yaml
 
 # -----------------------------------------------------------------------------
 # Multi-Node Cluster Testing
@@ -180,20 +175,11 @@ test-cluster-stop:
 	@./$(TEST_DIR)/test-multinode.sh stop all
 
 # QEMU Cluster - Start all nodes with socket networking (VM-to-VM communication)
-# Uses launch-cluster.sh which orchestrates test-multinode.sh
+# Uses launch-qemu-cluster.sh which orchestrates test-multinode.sh
 qemu-cluster: build-test
 	@echo "Starting full k3s cluster with QEMU socket networking..."
 	@echo ""
-	./$(TEST_DIR)/launch-cluster.sh
-
-# QEMU Cluster - Start specific node by index (1-based)
-qemu-node: build-test
-	@if [ -z "$(NODE)" ]; then \
-		echo "Usage: make qemu-node NODE=<index>"; \
-		echo "Example: make qemu-node NODE=1  # Start first node"; \
-		exit 1; \
-	fi
-	./$(TEST_DIR)/test-alpine-cluster.sh qemu.yaml $(NODE)
+	./$(TEST_DIR)/launch-qemu-cluster.sh
 
 # QEMU Cluster - Stop all running cluster VMs
 qemu-cluster-stop:
@@ -230,9 +216,7 @@ clean-all: clean clean-test
 	@echo "Removing qcow2 images and test artifacts..."
 	rm -f builds/*.qcow2 builds/*.raw 2>/dev/null || true
 	rm -f builds-qemu/*.qcow2 builds-qemu/*.raw 2>/dev/null || true
-	rm -rf $(TEST_DIR)/vm-diskless
-	rm -rf $(TEST_DIR)/vm-multinode
-	rm -f $(TEST_DIR)/setup.log
+	rm -rf $(TEST_DIR)/qemu-cluster
 	@echo "All artifacts cleaned."
 
 # =============================================================================

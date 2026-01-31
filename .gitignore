@@ -46,3 +46,8 @@ id_rsa*
 id_ed25519*
 
 *.qcow2
+
+# QEMU cluster runtime artifacts
+test/qemu-cluster/
+test/vm-*.log
+test/*.pid

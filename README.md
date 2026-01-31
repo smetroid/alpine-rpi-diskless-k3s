@@ -111,8 +111,10 @@ The cluster is configured through YAML files. Key configuration sections include
 ```bash
 # Using make (recommended)
 make build              # Build from default config (k3s.yaml)
+make build-test         # Build test overlays from qemu.yaml
 make validate           # Validate default config
-make clean              # Clean build artifacts
+make clean              # Clean production build artifacts
+make clean-test         # Clean test build artifacts
 
 # With custom config
 make build CONFIG=my-cluster.yaml
@@ -131,9 +133,60 @@ make validate CONFIG=my-cluster.yaml
 
 ### Testing
 
+The project provides two testing approaches for different use cases:
+
+#### Single VM Testing
+Use this to validate build scripts and apkovl overlays quickly:
+
 ```bash
-# Test Alpine diskless boot process
-./test/test-alpine-diskless-boot.sh
+# Build test overlays
+make build-test
+
+# Boot single VM (uses qemu.yaml configuration)
+./test/test-qemu.sh qemu.yaml
+
+# Or use make recipe
+make test
+```
+
+This boots a single VM with minimal resources to verify:
+- Overlay generation works correctly
+- System bootstrap completes
+- k3s installs and starts properly
+
+#### QEMU Cluster Testing
+Use this to test multi-node cluster formation with socket networking:
+
+```bash
+# Build and start full cluster (master + workers)
+make qemu-cluster
+
+# Check cluster status
+make qemu-cluster-status
+
+# Stop all cluster VMs
+make qemu-cluster-stop
+```
+
+The cluster testing creates:
+- VM-to-VM network on `10.99.0.x` subnet (socket networking)
+- SSH access via `10.0.2.x` addresses (QEMU user networking)
+- Per-node log files in `test/qemu-cluster/` (gitignored)
+
+To access the cluster:
+```bash
+# SSH to master node
+ssh -p 2222 root@localhost
+
+# Verify cluster
+kubectl get nodes
+kubectl get pods -A
+```
+
+**Note**: Cluster VMs store k3s data in qcow2 files that persist across reboots. To perform a clean test:
+```bash
+make clean-test  # Remove test build artifacts
+rm -rf test/qemu-cluster/*.qcow2  # Wipe data disks
 ```
 
 ## Key Architecture Principles

@@ -637,18 +637,18 @@ start() {
 
     # Set up k3s config bind mount to persistent storage
     mkdir -p /mnt/data/k3s /mnt/data/var-lib-rancher-k3s
-    mkdir -p /etc/k3s /var/lib/rancher/k3s
+    mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s
 
     # Copy overlay k3s config to persistent storage if it doesn't exist there
-    if [ -f /etc/k3s/config.yaml ] && [ ! -f /mnt/data/k3s/config.yaml ]; then
+    if [ -f /etc/rancher/k3s/config.yaml ] && [ ! -f /mnt/data/k3s/config.yaml ]; then
         einfo "Copying overlay k3s config to persistent storage"
-        cp /etc/k3s/config.yaml /mnt/data/k3s/config.yaml
+        cp /etc/rancher/k3s/config.yaml /mnt/data/k3s/config.yaml
     fi
 
-    if ! mountpoint -q /etc/k3s 2>/dev/null; then
-        einfo "Setting up /etc/k3s on persistent storage"
-        mount --bind /mnt/data/k3s /etc/k3s
-        eend $? "/etc/k3s mount"
+    if ! mountpoint -q /etc/rancher/k3s 2>/dev/null; then
+        einfo "Setting up /etc/rancher/k3s on persistent storage"
+        mount --bind /mnt/data/k3s /etc/rancher/k3s
+        eend $? "/etc/rancher/k3s mount"
     fi
 
     if ! mountpoint -q /var/lib/rancher/k3s 2>/dev/null; then
@@ -805,7 +805,7 @@ depend() {
 
 start() {
     # Check if this is a worker node (has server: in config)
-    if ! grep -q "^server:" /etc/k3s/config.yaml 2>/dev/null; then
+    if ! grep -q "^server:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
         einfo "Master node detected - no token retrieval needed"
         mark_service_started
         return 0
@@ -814,7 +814,7 @@ start() {
     ebegin "Retrieving k3s worker token from master"
 
     # Extract master URL from config
-    SERVER_URL=$(grep "^server:" /etc/k3s/config.yaml | cut -d' ' -f2)
+    SERVER_URL=$(grep "^server:" /etc/rancher/k3s/config.yaml | cut -d' ' -f2)
 
     # Extract hostname from URL - remove protocol prefix then port and path
     MASTER_HOST=$(echo "${SERVER_URL}" | sed 's|https://||' | sed 's|http://||' | cut -d: -f1 | cut -d/ -f1)
