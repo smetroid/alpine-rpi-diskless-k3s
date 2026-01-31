@@ -3,7 +3,7 @@
 
 cluster:
   name: "alpine-k3s-test"
-  k3s_version: "1.33"
+  k3s_version: "v1.35.0+k3s1"
   token: "REDACTED_TOKEN" # Leave empty to auto-generate
 
 network:

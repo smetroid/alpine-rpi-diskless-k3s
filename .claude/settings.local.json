@@ -72,7 +72,8 @@
       "Bash(git worktree:*)",
       "Bash(git push:*)",
       "Bash(__NEW_LINE_40c0e34b912e16b7__ echo \"\")",
-      "Bash(pgrep:*)"
+      "Bash(pgrep:*)",
+      "Bash(ssh-keygen:*)"
     ],
     "deny": [],
     "ask": []
