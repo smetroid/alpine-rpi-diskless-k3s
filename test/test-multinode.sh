@@ -24,6 +24,17 @@ CONFIG_FILE="${CONFIG_FILE:-$PROJECT_DIR/k3s.yaml}"
 [[ "$CONFIG_FILE" != /* ]] && CONFIG_FILE="$PROJECT_DIR/$CONFIG_FILE"
 export CONFIG_FILE
 
+# Determine build directory based on config basename
+CONFIG_BASENAME="$(basename "$CONFIG_FILE")"
+case "$CONFIG_BASENAME" in
+    qemu.yaml|*-test.yaml|*-qemu.yaml)
+        BUILD_DIR="$PROJECT_DIR/builds-qemu"
+        ;;
+    *)
+        BUILD_DIR="$PROJECT_DIR/builds"
+        ;;
+esac
+
 RAM_SIZE="${RAM_SIZE:-4096M}"
 ALPINE_VERSION="3.22.1"
 
@@ -171,7 +182,7 @@ prepare_overlay() {
     local node_ip="$2"
     local role="$3"
 
-    local apkovl_file="$PROJECT_DIR/builds/${node_name}.apkovl.tar.gz"
+    local apkovl_file="$BUILD_DIR/${node_name}.apkovl.tar.gz"
     local overlay_subdir="$OVERLAY_DIR/$node_name"
     local temp_dir="$VM_DIR/temp-${node_name}"
 
@@ -250,8 +261,9 @@ EOF
     fi
 
     # Repack overlay with node-specific hostname
-    tar -czf "$overlay_subdir/${node_name}.apkovl.tar.gz" etc usr root var 2>/dev/null || \
-    tar -czf "$overlay_subdir/${node_name}.apkovl.tar.gz" etc usr root 2>/dev/null
+    # Include sbin and lib for overlay packages (e2fsprogs, etc.)
+    tar -czf "$overlay_subdir/${node_name}.apkovl.tar.gz" etc usr root var sbin lib 2>/dev/null || \
+    tar -czf "$overlay_subdir/${node_name}.apkovl.tar.gz" etc usr root sbin lib 2>/dev/null
 
     cd "$VM_DIR"
     rm -rf "$temp_dir"

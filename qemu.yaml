@@ -4,12 +4,12 @@
 cluster:
   name: "alpine-k3s-test"
   k3s_version: "v1.35.0+k3s1"
-  token: "REDACTED_TOKEN" # Leave empty to auto-generate
+  token: "REDACTED_TOKEN"
 
 network:
   domain: "local"
-  subnet: "10.0.2.0/24"
-  gateway: "10.0.2.2"
+  subnet: "10.99.0.0/24"
+  gateway: "10.99.0.2"
   # Note: Using Cloudflare DNS for better reliability
   dns_servers:
     - "1.1.1.1"
@@ -17,18 +17,18 @@ network:
 
   # MetalLB LoadBalancer IP range
   loadbalancer_pool:
-    start: "10.0.2.70"
-    end: "10.0.2.80"
+    start: "10.99.0.70"
+    end: "10.99.0.80"
 
 nodes:
   - name: "qemu-test-1"
-    ip: "10.0.2.15"
+    ip: "10.99.0.15"
     role: "master"
     taints:
       - "CriticalAddonsOnly=true:NoExecute"
 
   - name: "qemu-test-2"
-    ip: "10.0.2.16"
+    ip: "10.99.0.16"
     role: "worker"
 
 k3s:
@@ -51,7 +51,7 @@ k3s:
 
   # Load balancer VIP for worker nodes (recommended for true HA)
   # Workers connect to this VIP which distributes across all masters
-  loadbalancer_vip: "10.0.2.100"
+  #loadbalancer_vip: "10.0.2.100"
 
   # Cluster networking
   cluster_cidr: "10.42.0.0/16"
@@ -117,4 +117,6 @@ overlay_packages:
   - name: "libblkid"  # Block device ID library
   - name: "libuuid"  # UUID library
   - name: "libeconf"  # Config file library (needed by libblkid)
+  - name: "libarchive"  # Archive library (needed by mke2fs)
+  - name: "musl"  # C library and dynamic loader (ld-musl-x86_64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
