@@ -114,6 +114,8 @@ ssh:
 # Architecture-specific packages will be downloaded automatically
 overlay_packages:
   - name: "openssh"
+  - name: "chrony"  # NTP time synchronization (required for SSL/TLS)
+  - name: "chrony-openrc"  # OpenRC init script for chrony
   - name: "e2fsprogs"
   - name: "e2fsprogs-libs"  # Shared libraries for mkfs.ext4
   - name: "libcom_err"  # Error description library
