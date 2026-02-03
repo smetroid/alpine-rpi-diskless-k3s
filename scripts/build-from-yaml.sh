@@ -411,6 +411,53 @@ fi
 
 # Note: k3s bind mounts (/etc/rancher/k3s, /var/lib/rancher/k3s) are set up by storage-init service
 
+# Wait for chrony to sync time before installing k3s (SSL certificates require correct time)
+if [ "$FIRST_BOOT" = "true" ]; then
+    echo "⏰ Starting chronyd and waiting for time sync..."
+    _logger "Starting chronyd for time synchronization"
+
+    # Start chronyd service
+    rc-service chronyd start 2>/dev/null || {
+        echo "⚠️  Failed to start chronyd"
+        _logger "Failed to start chronyd"
+    }
+
+    # Wait up to 60 seconds for time to sync (SSL requires correct time)
+    echo "⏳ Waiting for time to sync (max 60 seconds)..."
+    TIMEOUT=60
+    ELAPSED=0
+    while [ $ELAPSED -lt $TIMEOUT ]; do
+        # Check if chrony has synced with a time source (Ref ID not 00000000)
+        REF_ID=$(chronyc tracking 2>/dev/null | grep "Reference ID" | awk '{print $4}')
+        if [ -n "$REF_ID" ] && [ "$REF_ID" != "00000000" ]; then
+            echo "✅ Time synchronized successfully"
+            _logger "Time synchronized successfully"
+            break
+        fi
+        sleep 2
+        ELAPSED=$(($ELAPSED + 2))
+        echo -n "."
+    done
+    echo ""
+
+    # Force time step if still not synced after timeout
+    if [ $ELAPSED -ge $TIMEOUT ]; then
+        echo "⚠️  Time sync timeout, forcing chrony to step time"
+        chronyc makestep 2>/dev/null || true
+        sleep 2
+    fi
+
+    # Show current time for verification
+    echo "📅 Current time: $(date)"
+fi
+
+# Restore k3s service file from persistent storage if available (lost on reboot)
+if [ -f /mnt/data/etc-init-d/k3s ] && [ ! -L /etc/init.d/k3s ]; then
+    echo "🔄 Restoring k3s service file from persistent storage..."
+    ln -s /mnt/data/etc-init-d/k3s /etc/init.d/k3s
+    echo "✅ k3s service file restored"
+fi
+
 # Install k3s if not present
 echo "🚀 Installing k3s..."
 if [ ! -f /usr/local/bin/k3s ]; then
@@ -467,13 +514,27 @@ if [ -f /etc/rancher/k3s/config.yaml ]; then
     else
         echo "✅ k3s service already running"
     fi
+
+    # Persist k3s init script to survive reboots (diskless RAM loses it)
+    if [ -f /etc/init.d/k3s ]; then
+        echo "💾 Persisting k3s service file for reboots..."
+        mkdir -p /mnt/data/etc-init-d
+        # Only copy if not already there or newer
+        if [ ! -f /mnt/data/etc-init-d/k3s ] || [ /etc/init.d/k3s -nt /mnt/data/etc-init-d/k3s ]; then
+            cp -a /etc/init.d/k3s /mnt/data/etc-init-d/k3s
+        fi
+        # Replace with symlink to persistent storage
+        rm -f /etc/init.d/k3s
+        ln -s /mnt/data/etc-init-d/k3s /etc/init.d/k3s
+        echo "✅ k3s service file persisted"
+    fi
 else
     echo "⚠️ No k3s configuration found - k3s not started"
 fi
 
-if [ "\$FIRST_BOOT" = "true" ]; then
+if [ "$FIRST_BOOT" = "true" ]; then
     # Mark k3s initialization as complete
-    echo "\$(date): k3s initialization completed successfully" > /mnt/data/.k3s-initialized
+    echo "$(date): k3s initialization completed successfully" > /mnt/data/.k3s-initialized
     _logger "Alpine k3s first boot initialization complete"
     echo "✅ Alpine k3s first boot initialization complete"
 else

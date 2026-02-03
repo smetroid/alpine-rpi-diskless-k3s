@@ -3,7 +3,7 @@
 
 cluster:
   name: "alpine-k3s"
-  k3s_version: "1.33"
+  k3s_version: "v1.35.0+k3s1"
   token: "" # Leave empty to auto-generate
 
 network:
@@ -53,7 +53,7 @@ k3s:
 
   # Load balancer VIP for worker nodes (recommended for true HA)
   # Workers connect to this VIP which distributes across all masters
-  loadbalancer_vip: "192.168.1.100"
+  #loadbalancer_vip: "192.168.1.254"
 
   # Cluster networking
   cluster_cidr: "10.42.0.0/16"
