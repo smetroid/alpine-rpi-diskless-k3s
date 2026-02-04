@@ -308,23 +308,37 @@ EOF
     mkdir -p "${NODE_NAME}-apkovl/var/lib/chrony"
 
     # Create k3s init script based on node role
-    # k3s package doesn't include OpenRC init script, so we create it here
+    # Matches the official k3s OpenRC init script installed by the package
     if [ "$NODE_ROLE" = "master" ]; then
         cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << 'K3S_INIT_EOF'
 #!/sbin/openrc-run
 
 description="k3s Kubernetes server (master)"
+name=k3s
 command="/usr/local/bin/k3s"
-command_args="server"
-command_background=true
-pidfile="/run/k3s.pid"
-output_log="/var/log/k3s.log"
-error_log="/var/log/k3s.log"
+command_args="server \
+    >>/var/log/k3s.log 2>&1"
+
+supervisor=supervise-daemon
+output_log=/var/log/k3s.log
+error_log=/var/log/k3s.log
+pidfile="/var/run/k3s.pid"
+respawn_delay=5
+respawn_max=0
 
 depend() {
-    need net
-    after firewall
+    after network-online
+    want cgroups
 }
+
+start_pre() {
+    rm -f /tmp/k3s.*
+}
+
+set -o allexport
+if [ -f /etc/environment ]; then . /etc/environment; fi
+if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
+set +o allexport
 K3S_INIT_EOF
         chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
         # Enable k3s in default runlevel for master nodes
@@ -334,17 +348,31 @@ K3S_INIT_EOF
 #!/sbin/openrc-run
 
 description="k3s Kubernetes agent (worker)"
+name=k3s
 command="/usr/local/bin/k3s"
-command_args="agent"
-command_background=true
-pidfile="/run/k3s.pid"
-output_log="/var/log/k3s.log"
-error_log="/var/log/k3s.log"
+command_args="agent \
+    >>/var/log/k3s.log 2>&1"
+
+supervisor=supervise-daemon
+output_log=/var/log/k3s.log
+error_log=/var/log/k3s.log
+pidfile="/var/run/k3s.pid"
+respawn_delay=5
+respawn_max=0
 
 depend() {
-    need net
-    after firewall
+    after network-online
+    want cgroups
 }
+
+start_pre() {
+    rm -f /tmp/k3s.*
+}
+
+set -o allexport
+if [ -f /etc/environment ]; then . /etc/environment; fi
+if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
+set +o allexport
 K3S_INIT_EOF
         chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
         # Enable k3s in default runlevel for worker nodes
