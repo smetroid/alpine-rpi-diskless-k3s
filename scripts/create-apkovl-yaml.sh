@@ -307,6 +307,50 @@ EOF
     # Create persistent chrony directory structure
     mkdir -p "${NODE_NAME}-apkovl/var/lib/chrony"
 
+    # Create k3s init script based on node role
+    # k3s package doesn't include OpenRC init script, so we create it here
+    if [ "$NODE_ROLE" = "master" ]; then
+        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << 'K3S_INIT_EOF'
+#!/sbin/openrc-run
+
+description="k3s Kubernetes server (master)"
+command="/usr/local/bin/k3s"
+command_args="server"
+command_background=true
+pidfile="/run/k3s.pid"
+output_log="/var/log/k3s.log"
+error_log="/var/log/k3s.log"
+
+depend() {
+    need net
+    after firewall
+}
+K3S_INIT_EOF
+        chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
+        # Enable k3s in default runlevel for master nodes
+        ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
+    else
+        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << 'K3S_INIT_EOF'
+#!/sbin/openrc-run
+
+description="k3s Kubernetes agent (worker)"
+command="/usr/local/bin/k3s"
+command_args="agent"
+command_background=true
+pidfile="/run/k3s.pid"
+output_log="/var/log/k3s.log"
+error_log="/var/log/k3s.log"
+
+depend() {
+    need net
+    after firewall
+}
+K3S_INIT_EOF
+        chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
+        # Enable k3s in default runlevel for worker nodes
+        ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
+    fi
+
     # Create minimal fstab with basic entries to satisfy fstabinfo
     # storage-init handles actual data partition mounting dynamically
     cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
