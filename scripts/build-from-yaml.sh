@@ -451,18 +451,17 @@ if [ "$FIRST_BOOT" = "true" ]; then
     echo "📅 Current time: $(date)"
 fi
 
-# Restore k3s service file from persistent storage if available (lost on reboot)
-if [ -f /mnt/data/etc-init-d/k3s ] && [ ! -L /etc/init.d/k3s ]; then
-    echo "🔄 Restoring k3s service file from persistent storage..."
-    ln -s /mnt/data/etc-init-d/k3s /etc/init.d/k3s
-    echo "✅ k3s service file restored"
-fi
-
 # Install k3s if not present
 echo "🚀 Installing k3s..."
 if [ ! -f /usr/local/bin/k3s ]; then
     _logger "Downloading and installing k3s"
     echo "📥 Downloading k3s version @@K3S_VERSION@@..."
+
+    # Save our custom k3s init script before installation (k3s installer overwrites it)
+    if [ -f /etc/init.d/k3s ]; then
+        echo "💾 Saving custom k3s init script..."
+        cp -a /etc/init.d/k3s /tmp/k3s-init.custom
+    fi
 
     # Set INSTALL_K3S_VERSION if specific version is configured
     if [ -n "@@K3S_VERSION@@" ] && [ "@@K3S_VERSION@@" != "latest" ]; then
@@ -470,11 +469,21 @@ if [ ! -f /usr/local/bin/k3s ]; then
         echo "   Using version: @@K3S_VERSION@@"
     fi
 
+    # Prevent k3s installer from starting the service
+    export INSTALL_K3S_SKIP_START=true
+
     wget -qO- https://get.k3s.io | sh -
     K3S_INSTALL_STATUS=\$?
     if [ \$K3S_INSTALL_STATUS -eq 0 ] || [ -x /usr/local/bin/k3s ]; then
         echo "✅ k3s installed successfully"
         _logger "k3s installation completed successfully"
+
+        # Restore our custom k3s init script after installation
+        if [ -f /tmp/k3s-init.custom ]; then
+            echo "🔄 Restoring custom k3s init script..."
+            cp -a /tmp/k3s-init.custom /etc/init.d/k3s
+            rm -f /tmp/k3s-init.custom
+        fi
     else
         echo "❌ k3s installation failed (exit code: \$K3S_INSTALL_STATUS)"
         _logger "k3s installation failed"
@@ -491,19 +500,7 @@ if [ -f /etc/rancher/k3s/config.yaml ]; then
 
     # Check if this is a worker node (config has server: URL)
     if grep -q "^server:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
-        echo "🔧 Worker node detected - configuring k3s for agent mode"
-
-        # Check if k3s is already running and was started as server
-        if rc-service k3s status 2>/dev/null | grep -q "started"; then
-            # Stop k3s if it's running with wrong mode
-            echo "  Stopping k3s to reconfigure for agent mode..."
-            rc-service k3s stop 2>/dev/null || true
-            sleep 2
-        fi
-
-        # Modify k3s init script to use agent instead of server
-        sed -i 's/command_args="server/command_args="agent/' /etc/init.d/k3s
-        echo "  ✅ k3s service configured for agent mode"
+        echo "🔧 Worker node detected - k3s will run in agent mode"
     fi
 
     # Start k3s if not already running
@@ -513,20 +510,6 @@ if [ -f /etc/rancher/k3s/config.yaml ]; then
         echo "✅ k3s service started and enabled"
     else
         echo "✅ k3s service already running"
-    fi
-
-    # Persist k3s init script to survive reboots (diskless RAM loses it)
-    if [ -f /etc/init.d/k3s ]; then
-        echo "💾 Persisting k3s service file for reboots..."
-        mkdir -p /mnt/data/etc-init-d
-        # Only copy if not already there or newer
-        if [ ! -f /mnt/data/etc-init-d/k3s ] || [ /etc/init.d/k3s -nt /mnt/data/etc-init-d/k3s ]; then
-            cp -a /etc/init.d/k3s /mnt/data/etc-init-d/k3s
-        fi
-        # Replace with symlink to persistent storage
-        rm -f /etc/init.d/k3s
-        ln -s /mnt/data/etc-init-d/k3s /etc/init.d/k3s
-        echo "✅ k3s service file persisted"
     fi
 else
     echo "⚠️ No k3s configuration found - k3s not started"
