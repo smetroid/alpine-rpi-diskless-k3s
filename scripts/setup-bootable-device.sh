@@ -346,7 +346,7 @@ fi
 # cmdline.txt includes cgroup parameters for k3s - must be here to override
 # any default cgroup_disable=memory that may be set by the kernel/firmware
 sudo tee cmdline.txt << 'EOF'
-modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty1 cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset swapaccount=1
+modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty1 swapaccount=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1
 EOF
 
 sudo tee usercfg.txt << 'EOF'
