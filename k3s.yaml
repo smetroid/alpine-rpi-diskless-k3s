@@ -108,7 +108,6 @@ ssh:
   authorized_keys:
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZLY9AEip1+eIHgAL6yArtOYkQmr628i/1dnQ1f2d7q you@example.com"
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDgWNENolh5s+6d+tpHV8IpnGG3JQr5Ozu6tg2QXIyyB kike@localhost.local"
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDgWNENolh5s+6d+tpHV8IpnGG3JQr5Ozu6tg2QXIyyB kike@localhost.local"
 
 # Overlay packages - packages to include in apkovl for early boot
 # Architecture-specific packages will be downloaded automatically

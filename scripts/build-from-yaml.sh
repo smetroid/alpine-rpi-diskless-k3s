@@ -208,7 +208,7 @@ rc-update add chronyd default
 rc-update add cgroups boot
 
 # NOTE: SSH setup is handled by the ssh-persist service (runs on every boot)
-# This ensures SSH persists across reboots without depending on LBU backup/restore
+# This ensures SSH persists across reboots via persistent storage
 
 rc-update add savecache shutdown
 
@@ -293,6 +293,8 @@ cp -a /etc/lbu "$TEMP_DIR/etc/" 2>/dev/null || true
 # Timezone
 cp -a /etc/timezone "$TEMP_DIR/etc/" 2>/dev/null || true
 cp -a /etc/localtime "$TEMP_DIR/etc/" 2>/dev/null || true
+# Machine ID (required for k3s/containerd node identification)
+cp -a /etc/machine-id "$TEMP_DIR/etc/" 2>/dev/null || true
 
 # /root/.ssh - authorized keys
 if [ -d /root/.ssh ]; then
@@ -342,6 +344,7 @@ etc/modules
 etc/sysctl.d/*
 etc/timezone
 etc/localtime
+etc/machine-id
 etc/k3s
 etc/init.d/k3s
 etc/runlevels/default/k3s

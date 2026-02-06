@@ -169,6 +169,21 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
 
+    # Generate machine-id for k3s/containerd node identification
+    # This prevents k3s warnings about missing /etc/machine-id and ensures
+    # consistent node identification across reboots
+    # https://gitlab.alpinelinux.org/alpine/aports/-/issues/8761
+    if command -v uuidgen >/dev/null 2>&1; then
+        # macOS and most systems have uuidgen
+        uuidgen | tr '[:upper:]' '[:lower:]' > "${NODE_NAME}-apkovl/etc/machine-id"
+    else
+        # Fallback: generate a random UUID
+        # Uses node name + timestamp + random for uniqueness
+        echo "$(hostname)-$(date +%s)-$RANDOM" | md5sum | awk '{print $1}' > "${NODE_NAME}-apkovl/etc/machine-id" 2>/dev/null || \
+        echo "${NODE_NAME}-$(date +%s%N)" | md5sum | awk '{print $1}' > "${NODE_NAME}-apkovl/etc/machine-id" 2>/dev/null || \
+        echo "${NODE_NAME}-$(date +%s)" > "${NODE_NAME}-apkovl/etc/machine-id"
+    fi
+
     # This fixes the /lib/modules directory missing when booting, in turn breaks the image
     # https://gitlab.alpinelinux.org/alpine/mkinitfs/-/issues/8
     touch "${NODE_NAME}-apkovl/etc/.default_boot_services"
