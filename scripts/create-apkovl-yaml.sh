@@ -101,6 +101,62 @@ process_overlay_packages() {
     echo "Overlay packages processing complete"
 }
 
+# Download k3s binary for target architecture
+# Downloads from GitHub releases and places in apkovl /usr/local/bin/k3s
+download_k3s_binary() {
+    local apkovl_dir="$1"
+    local config_file="$2"
+    local arch=$(yaml_get "alpine.architecture" "$config_file")
+    local version=$(yaml_get "cluster.k3s_version" "$config_file")
+
+    # Map Alpine architecture names to k3s/GitHub release architecture names
+    case "$arch" in
+        aarch64) k3s_arch="arm64" ;;
+        armv7|armhf) k3s_arch="arm" ;;
+        armv6) k3s_arch="arm" ;;
+        x86_64) k3s_arch="amd64" ;;
+        x86) k3s_arch="386" ;;
+        *) k3s_arch="$arch" ;;
+    esac
+
+    local url="https://github.com/k3s-io/k3s/releases/download/${version}/k3s"
+    local dest="${apkovl_dir}/usr/local/bin/k3s"
+
+    echo "Downloading k3s ${version} (${k3s_arch})..."
+
+    # Download with error handling
+    if ! curl -fL --progress-bar "${url}" -o "$dest"; then
+        echo "❌ Error: Failed to download k3s binary"
+        echo "   URL: ${url}"
+        echo "   Check version at: https://github.com/k3s-io/k3s/releases"
+        rm -f "$dest"
+        return 1
+    fi
+
+    # Verify it's a valid ELF binary (Linux executable)
+    if ! file "$dest" | grep -q "ELF"; then
+        echo "❌ Error: Downloaded file is not a valid ELF binary"
+        file "$dest"
+        rm -f "$dest"
+        return 1
+    fi
+
+    # Verify file size (k3s is ~50MB+, warn if too small)
+    local size=$(stat -f%z "$dest" 2>/dev/null || stat -c%s "$dest" 2>/dev/null || echo "0")
+    if [ "$size" -lt 10000000 ]; then
+        echo "⚠️  Warning: Downloaded binary seems too small (${size} bytes)"
+        echo "   Expected k3s binary to be ~50MB+"
+        echo "   This may indicate a partial download or wrong architecture"
+        rm -f "$dest"
+        return 1
+    fi
+
+    # Make executable
+    chmod +x "$dest"
+
+    echo "✅ k3s ${version} downloaded ($(du -h "$dest" | cut -f1))"
+}
+
 # Use the config file from environment, or from parameter, or default
 CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
@@ -165,6 +221,9 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
+
+    # Download k3s binary for target architecture
+    download_k3s_binary "${NODE_NAME}-apkovl" "$CONFIG_FILE"
 
     # Set hostname
     echo "$NODE_NAME" > "${NODE_NAME}-apkovl/etc/hostname"
