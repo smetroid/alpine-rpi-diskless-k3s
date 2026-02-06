@@ -108,7 +108,6 @@ ssh:
   authorized_keys:
     - "ssh-ed25519 REDACTED_SSH_KEY_1 you@example.com"
     - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
-    - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
 
 # Overlay packages - packages to include in apkovl for early boot
 # Architecture-specific packages will be downloaded automatically
