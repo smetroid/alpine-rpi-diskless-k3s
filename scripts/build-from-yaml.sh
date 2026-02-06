@@ -374,31 +374,30 @@ echo "✅ System: Packages and timezone configured" > /dev/console
 # Commit the overlay to save installed packages with runtime prefix
 lbu-commit-runtime
 
-# === k3s Installation ===
+# === k3s Startup ===
 echo "=============================================="
-echo "🚀 k3s Installation"
+echo "🚀 k3s Startup"
 echo "=============================================="
 
 # Wait briefly for system to stabilize
 echo "⏳ Waiting for system to stabilize..."
-sleep 5
+sleep 2
 
 # Verify that storage-init service has completed
 if [ ! -f /mnt/data/.storage-init-complete ]; then
     echo "❌ Storage initialization not completed. storage-init service should run first."
-    _logger "Storage initialization not complete, cannot install k3s"
+    _logger "Storage initialization not complete, cannot start k3s"
     exit 1
 fi
 echo "✅ Disk setup verified - storage is ready"
 
-# Check if this is first boot for k3s
-if [ ! -f /mnt/data/.k3s-initialized ]; then
-    FIRST_BOOT=true
-    echo "🆕 First boot detected - performing full k3s initialization"
-else
-    FIRST_BOOT=false
-    echo "🔄 Subsequent boot - performing quick k3s setup"
+# Verify k3s binary exists (should be in apkovl)
+if [ ! -x /usr/local/bin/k3s ]; then
+    echo "❌ k3s binary not found at /usr/local/bin/k3s"
+    _logger "k3s binary not found - was it included in apkovl?"
+    exit 1
 fi
+echo "✅ k3s binary found"
 
 # Load required kernel modules for k3s networking
 echo "🔧 Loading kernel modules for k3s..."
@@ -414,87 +413,18 @@ fi
 
 # Note: k3s bind mounts (/etc/rancher/k3s, /var/lib/rancher/k3s) are set up by storage-init service
 
-# Wait for chrony to sync time before installing k3s (SSL certificates require correct time)
-if [ "$FIRST_BOOT" = "true" ]; then
-    echo "⏰ Starting chronyd and waiting for time sync..."
-    _logger "Starting chronyd for time synchronization"
+# Start chronyd for time synchronization (SSL certificates require correct time)
+echo "⏰ Starting chronyd for time synchronization..."
+rc-service chronyd start 2>/dev/null || {
+    echo "⚠️  Failed to start chronyd"
+    _logger "Failed to start chronyd"
+}
 
-    # Start chronyd service
-    rc-service chronyd start 2>/dev/null || {
-        echo "⚠️  Failed to start chronyd"
-        _logger "Failed to start chronyd"
-    }
-
-    # Wait up to 60 seconds for time to sync (SSL requires correct time)
-    echo "⏳ Waiting for time to sync (max 60 seconds)..."
-    TIMEOUT=60
-    ELAPSED=0
-    while [ $ELAPSED -lt $TIMEOUT ]; do
-        # Check if chrony has synced with a time source (Ref ID not 00000000)
-        REF_ID=$(chronyc tracking 2>/dev/null | grep "Reference ID" | awk '{print $4}')
-        if [ -n "$REF_ID" ] && [ "$REF_ID" != "00000000" ]; then
-            echo "✅ Time synchronized successfully"
-            _logger "Time synchronized successfully"
-            break
-        fi
-        sleep 2
-        ELAPSED=$(($ELAPSED + 2))
-        echo -n "."
-    done
-    echo ""
-
-    # Force time step if still not synced after timeout
-    if [ $ELAPSED -ge $TIMEOUT ]; then
-        echo "⚠️  Time sync timeout, forcing chrony to step time"
-        chronyc makestep 2>/dev/null || true
-        sleep 2
-    fi
-
-    # Show current time for verification
-    echo "📅 Current time: $(date)"
-fi
-
-# Install k3s if not present
-echo "🚀 Installing k3s..."
-if [ ! -f /usr/local/bin/k3s ]; then
-    _logger "Downloading and installing k3s"
-    echo "📥 Downloading k3s version @@K3S_VERSION@@..."
-
-    # Save our custom k3s init script before installation (k3s installer overwrites it)
-    if [ -f /etc/init.d/k3s ]; then
-        echo "💾 Saving custom k3s init script..."
-        cp -a /etc/init.d/k3s /tmp/k3s-init.custom
-    fi
-
-    # Set INSTALL_K3S_VERSION if specific version is configured
-    if [ -n "@@K3S_VERSION@@" ] && [ "@@K3S_VERSION@@" != "latest" ]; then
-        export INSTALL_K3S_VERSION="@@K3S_VERSION@@"
-        echo "   Using version: @@K3S_VERSION@@"
-    fi
-
-    # Prevent k3s installer from starting the service
-    export INSTALL_K3S_SKIP_START=true
-
-    wget -qO- https://get.k3s.io | sh -
-    K3S_INSTALL_STATUS=\$?
-    if [ \$K3S_INSTALL_STATUS -eq 0 ] || [ -x /usr/local/bin/k3s ]; then
-        echo "✅ k3s installed successfully"
-        _logger "k3s installation completed successfully"
-
-        # Restore our custom k3s init script after installation
-        if [ -f /tmp/k3s-init.custom ]; then
-            echo "🔄 Restoring custom k3s init script..."
-            cp -a /tmp/k3s-init.custom /etc/init.d/k3s
-            rm -f /tmp/k3s-init.custom
-        fi
-    else
-        echo "❌ k3s installation failed (exit code: \$K3S_INSTALL_STATUS)"
-        _logger "k3s installation failed"
-        exit 1
-    fi
-else
-    echo "✅ k3s already installed"
-fi
+# Wait briefly for time sync (don't block boot if chrony is slow)
+echo "⏳ Waiting briefly for time sync..."
+sleep 3
+chronyc makestep 2>/dev/null || true
+echo "📅 Current time: $(date)"
 
 # Start k3s service
 echo "🔄 Starting k3s service..."
@@ -518,15 +448,8 @@ else
     echo "⚠️ No k3s configuration found - k3s not started"
 fi
 
-if [ "$FIRST_BOOT" = "true" ]; then
-    # Mark k3s initialization as complete
-    echo "$(date): k3s initialization completed successfully" > /mnt/data/.k3s-initialized
-    _logger "Alpine k3s first boot initialization complete"
-    echo "✅ Alpine k3s first boot initialization complete"
-else
-    _logger "Alpine k3s subsequent boot setup complete"
-    echo "✅ Alpine k3s subsequent boot setup complete"
-fi
+_logger "Alpine k3s setup complete"
+echo "✅ Alpine k3s setup complete"
 echo "=============================================="
 
 exit 0
@@ -545,16 +468,6 @@ SCRIPT_EOF
 }
 EOF
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
-
-    # Replace K3S_VERSION placeholder with actual version from config
-    K3S_VERSION="$(yaml_get "cluster.k3s_version" "$CONFIG_FILE")"
-    # Use different sed syntax for macOS vs Linux
-    if sed --version 2>/dev/null | grep -q "GNU"; then
-        sed -i "s|@@K3S_VERSION@@|${K3S_VERSION}|g" "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
-    else
-        # macOS requires empty string argument for -i
-        sed -i "" "s|@@K3S_VERSION@@|${K3S_VERSION}|g" "${NODE_NAME}-apkovl/etc/init.d/system-bootstrap"
-    fi
 
     # Set up proper service dependencies and runlevels
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
