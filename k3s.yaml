@@ -94,11 +94,6 @@ storage:
   # Partition sizes (used by setup-bootable-device.sh for SD card preparation)
   boot_partition_size: "512MiB"
 
-  # Persistent paths for bind mounts (handled by storage-init service)
-  persistent_paths:
-    - "/etc/k3s"
-    - "/var/lib/k3s"
-
 ssh:
   port: 22
   permit_root_login: true
