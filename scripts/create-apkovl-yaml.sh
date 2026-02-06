@@ -119,7 +119,13 @@ download_k3s_binary() {
         *) k3s_arch="$arch" ;;
     esac
 
-    local url="https://github.com/k3s-io/k3s/releases/download/${version}/k3s"
+    # Build URL - k3s uses architecture suffix in filenames
+    # amd64 (x86_64) uses just "k3s", other arches use suffix
+    if [ "$k3s_arch" = "amd64" ]; then
+        local url="https://github.com/k3s-io/k3s/releases/download/${version}/k3s"
+    else
+        local url="https://github.com/k3s-io/k3s/releases/download/${version}/k3s-${k3s_arch}"
+    fi
     local dest="${apkovl_dir}/usr/local/bin/k3s"
 
     echo "Downloading k3s ${version} (${k3s_arch})..."
