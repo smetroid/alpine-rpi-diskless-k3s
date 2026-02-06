@@ -154,6 +154,15 @@ download_k3s_binary() {
     # Make executable
     chmod +x "$dest"
 
+    # Create symlinks for k3s embedded commands
+    # The k3s binary provides kubectl, crictl, and ctr functionality
+    # when invoked via these symlinks (same as official install script)
+    echo "Creating k3s utility symlinks..."
+    for cmd in kubectl crictl ctr; do
+        ln -sf k3s "${apkovl_dir}/usr/local/bin/${cmd}"
+        echo "  ✓ ${cmd} -> k3s"
+    done
+
     echo "✅ k3s ${version} downloaded ($(du -h "$dest" | cut -f1))"
 }
 
