@@ -9,6 +9,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
 
+# Load cache library
+source "$LIB_DIR/cache.sh"
+
 # Function to discover package version from APKINDEX
 # Returns the version string for the given package name
 discover_package_version() {
@@ -53,18 +56,18 @@ process_overlay_packages() {
 
     echo "Processing overlay packages..."
 
-    # Download APKINDEX once for all packages
-    local cache_dir="/tmp/overlay-packages-cache"
-    rm -rf "$cache_dir"
-    mkdir -p "$cache_dir"
+    # Use temporary directory for APKINDEX (not cached, it's small and changes frequently)
+    local tmp_dir="/tmp/overlay-packages-cache-$$_"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
 
-    if ! curl -sL "${base_url}/APKINDEX.tar.gz" -o "$cache_dir/APKINDEX.tar.gz"; then
+    if ! curl -sL "${base_url}/APKINDEX.tar.gz" -o "$tmp_dir/APKINDEX.tar.gz"; then
         echo "Error: Failed to download APKINDEX"
-        rm -rf "$cache_dir"
+        rm -rf "$tmp_dir"
         return 1
     fi
 
-    tar -xzf "$cache_dir/APKINDEX.tar.gz" -C "$cache_dir"
+    tar -xzf "$tmp_dir/APKINDEX.tar.gz" -C "$tmp_dir"
 
     # Process each package
     while IFS= read -r pkg_name; do
@@ -72,21 +75,32 @@ process_overlay_packages() {
         echo "Processing overlay package: $pkg_name"
 
         # Discover version using discover_package_version function
-        local version=$(discover_package_version "$pkg_name" "$cache_dir")
+        local version=$(discover_package_version "$pkg_name" "$tmp_dir")
         if [ -z "$version" ]; then
             echo "Error: Package $pkg_name not found in APKINDEX"
-            rm -rf "$cache_dir"
+            rm -rf "$tmp_dir"
             return 1
         fi
 
         echo "Found $pkg_name version: $version"
 
-        # Download package
-        local apk_file="${cache_dir}/${pkg_name}.apk"
-        if ! curl -sL "${base_url}/${pkg_name}-${version}.apk" -o "$apk_file"; then
-            echo "Error: Failed to download $pkg_name"
-            rm -rf "$cache_dir"
-            return 1
+        # Generate cache key for this package
+        local cache_key=$(cache_key_apk "$arch" "$pkg_name" "$version")
+        local apk_file="${tmp_dir}/${pkg_name}.apk"
+
+        # Try to get from cache first
+        if cache_get "apk" "$cache_key" "$apk_file"; then
+            # Cache hit - use cached file
+            :
+        else
+            # Cache miss - download from internet
+            if ! curl -sL "${base_url}/${pkg_name}-${version}.apk" -o "$apk_file"; then
+                echo "Error: Failed to download $pkg_name"
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            # Store in cache for next time
+            cache_put "apk" "$cache_key" "$apk_file"
         fi
 
         # Extract entire package to overlay
@@ -96,8 +110,8 @@ process_overlay_packages() {
         echo "Added $pkg_name to overlay"
     done <<< "$packages"
 
-    # Clean up cache
-    rm -rf "$cache_dir"
+    # Clean up temp directory
+    rm -rf "$tmp_dir"
     echo "Overlay packages processing complete"
 }
 
@@ -128,33 +142,59 @@ download_k3s_binary() {
     fi
     local dest="${apkovl_dir}/usr/local/bin/k3s"
 
-    echo "Downloading k3s ${version} (${k3s_arch})..."
+    # Generate cache key
+    local cache_key=$(cache_key_k3s "$version" "$k3s_arch")
+    local tmp_file="/tmp/k3s-download-$$_${cache_key}"
 
-    # Download with error handling
-    if ! curl -fL --progress-bar "${url}" -o "$dest"; then
-        echo "❌ Error: Failed to download k3s binary"
-        echo "   URL: ${url}"
-        echo "   Check version at: https://github.com/k3s-io/k3s/releases"
-        rm -f "$dest"
-        return 1
+    # Try to get from cache first
+    if cache_get "k3s" "$cache_key" "$tmp_file"; then
+        # Cache hit - verify and use cached binary
+        if ! file "$tmp_file" | grep -q "ELF"; then
+            echo "⚠️  Cached k3s binary is corrupted, re-downloading"
+            rm -f "$tmp_file"
+        else
+            # Valid cached file
+            mv "$tmp_file" "$dest"
+            echo "Using cached k3s ${version} (${k3s_arch})"
+        fi
     fi
 
-    # Verify it's a valid ELF binary (Linux executable)
-    if ! file "$dest" | grep -q "ELF"; then
-        echo "❌ Error: Downloaded file is not a valid ELF binary"
-        file "$dest"
-        rm -f "$dest"
-        return 1
-    fi
+    # Download if not in cache or cache was corrupted
+    if [ ! -f "$dest" ]; then
+        echo "Downloading k3s ${version} (${k3s_arch})..."
 
-    # Verify file size (k3s is ~50MB+, warn if too small)
-    local size=$(stat -f%z "$dest" 2>/dev/null || stat -c%s "$dest" 2>/dev/null || echo "0")
-    if [ "$size" -lt 10000000 ]; then
-        echo "⚠️  Warning: Downloaded binary seems too small (${size} bytes)"
-        echo "   Expected k3s binary to be ~50MB+"
-        echo "   This may indicate a partial download or wrong architecture"
-        rm -f "$dest"
-        return 1
+        # Download with error handling
+        if ! curl -fL --progress-bar "${url}" -o "$tmp_file"; then
+            echo "❌ Error: Failed to download k3s binary"
+            echo "   URL: ${url}"
+            echo "   Check version at: https://github.com/k3s-io/k3s/releases"
+            rm -f "$tmp_file"
+            return 1
+        fi
+
+        # Verify it's a valid ELF binary (Linux executable)
+        if ! file "$tmp_file" | grep -q "ELF"; then
+            echo "❌ Error: Downloaded file is not a valid ELF binary"
+            file "$tmp_file"
+            rm -f "$tmp_file"
+            return 1
+        fi
+
+        # Verify file size (k3s is ~50MB+, warn if too small)
+        local size=$(stat -f%z "$tmp_file" 2>/dev/null || stat -c%s "$tmp_file" 2>/dev/null || echo "0")
+        if [ "$size" -lt 10000000 ]; then
+            echo "⚠️  Warning: Downloaded binary seems too small (${size} bytes)"
+            echo "   Expected k3s binary to be ~50MB+"
+            echo "   This may indicate a partial download or wrong architecture"
+            rm -f "$tmp_file"
+            return 1
+        fi
+
+        # Store in cache for next time (before moving to destination)
+        cache_put "k3s" "$cache_key" "$tmp_file"
+
+        # Move to destination
+        mv "$tmp_file" "$dest"
     fi
 
     # Make executable

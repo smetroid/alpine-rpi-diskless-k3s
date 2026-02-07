@@ -19,6 +19,11 @@ else
     log_success() { echo "[SUCCESS] $*"; }
 fi
 
+# Load cache library
+if [ -f "$LIB_DIR/cache.sh" ]; then
+    . "$LIB_DIR/cache.sh"
+fi
+
 if [ $# -lt 1 ] || [ $# -gt 3 ]; then
     echo "Usage: $0 <sd_card_device> [config_file] [node_name]"
     echo "Example: $0 /dev/sdb"
@@ -285,8 +290,26 @@ ALPINE_MAJOR_VERSION=$(echo "$ALPINE_VERSION" | cut -d'.' -f1-2)
 # Store the original directory path
 ORIGINAL_DIR="$PWD"
 
-# Check if Alpine image exists and is valid
-if [ -f "$ALPINE_IMAGE" ]; then
+# Check cache first for Alpine ISO
+ALPINE_CACHE_KEY=$(cache_key_alpine_iso "rpi" "$ALPINE_VERSION" "$ALPINE_ARCH" "tar.gz" 2>/dev/null || echo "")
+ALPINE_CACHED=""
+
+if [ -n "$ALPINE_CACHE_KEY" ] && type cache_get >/dev/null 2>&1; then
+    # Try to get from cache
+    if cache_get "alpine-iso" "$ALPINE_CACHE_KEY" "$ALPINE_IMAGE"; then
+        # Verify cached file is valid
+        if gzip -t "$ALPINE_IMAGE" 2>/dev/null; then
+            log_success "Using cached Alpine image: $ALPINE_IMAGE"
+            ALPINE_CACHED="yes"
+        else
+            log_warn "Cached Alpine image is corrupted, re-downloading..."
+            rm -f "$ALPINE_IMAGE"
+        fi
+    fi
+fi
+
+# Check if Alpine image exists locally and is valid (not from cache)
+if [ -z "$ALPINE_CACHED" ] && [ -f "$ALPINE_IMAGE" ]; then
     log_success "Alpine image already exists: $ALPINE_IMAGE"
 
     # Verify it's a valid gzip archive
@@ -313,6 +336,11 @@ if [ ! -f "$ALPINE_IMAGE" ]; then
         exit 1
     fi
     log_success "Downloaded $ALPINE_IMAGE successfully ($(du -h "$ALPINE_IMAGE" | cut -f1))"
+
+    # Store in cache for next time
+    if [ -n "$ALPINE_CACHE_KEY" ] && type cache_put >/dev/null 2>&1; then
+        cache_put "alpine-iso" "$ALPINE_CACHE_KEY" "$ALPINE_IMAGE"
+    fi
 fi
 
 # Extract Alpine to boot partition
