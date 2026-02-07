@@ -23,10 +23,10 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
-.PHONY: help build validate clean clean-test clean-all setup-sd test test-prod \
+.PHONY: help build validate clean clean-cache clean-test clean-all setup-sd test test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
         qemu-cluster test-qemu \
-        build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config
+        build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats
 
 # Default target
 help:
@@ -38,8 +38,10 @@ help:
 	@echo "  make template           Create partitioned disk template for QEMU testing"
 	@echo "  make validate           Validate YAML configuration"
 	@echo "  make clean              Remove production build artifacts"
+	@echo "  make clean-cache        Remove download cache (.cache/)"
 	@echo "  make clean-test         Remove test build artifacts"
-	@echo "  make clean-all          Remove all artifacts (production + test vm dirs)"
+	@echo "  make clean-all          Remove all artifacts (production + test + cache + vm dirs)"
+	@echo "  make cache-stats        Show cache statistics"
 	@echo "  make list-apkovl        List all apkovl archives (both)"
 	@echo "  make list-apkovl-prod   List production apkovl archives"
 	@echo "  make list-apkovl-test   List test apkovl archives"
@@ -207,12 +209,30 @@ clean-test:
 	@echo "Test build artifacts cleaned."
 
 # Deep clean - also removes qcow2 images and test artifacts
-clean-all: clean clean-test
+clean-all: clean clean-cache clean-test
 	@echo "Removing qcow2 images and test artifacts..."
 	rm -f builds/*.qcow2 builds/*.raw 2>/dev/null || true
 	rm -f builds-qemu/*.qcow2 builds-qemu/*.raw 2>/dev/null || true
 	rm -rf $(TEST_DIR)/qemu-cluster
 	@echo "All artifacts cleaned."
+
+# Clean cache directory
+clean-cache:
+	@echo "Cleaning cache directory..."
+	@if [ -d ".cache" ]; then \
+		rm -rf .cache; \
+		echo "Cache cleared."; \
+	else \
+		echo "No cache to clean."; \
+	fi
+
+# Show cache statistics
+cache-stats:
+	@if [ -f "lib/cache.sh" ]; then \
+		. ./lib/cache.sh && cache_stats; \
+	else \
+		echo "Cache library not found."; \
+	fi
 
 # =============================================================================
 # Development Helpers

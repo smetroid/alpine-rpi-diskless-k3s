@@ -44,6 +44,11 @@ esac
 # Source YAML parser
 source "$PROJECT_DIR/lib/yaml-parser.sh"
 
+# Source cache library if available
+if [ -f "$PROJECT_DIR/lib/cache.sh" ]; then
+    source "$PROJECT_DIR/lib/cache.sh"
+fi
+
 usage() {
     cat << EOF
 Unified QEMU Test Script
@@ -146,9 +151,25 @@ setup_environment() {
     alpine_series=$(echo "$alpine_version" | cut -d. -f1-2)
 
     local alpine_iso="alpine-virt-${alpine_version}-${alpine_arch}.iso"
+
+    # Check cache first
+    if [ -n "$ALPINE_CACHE_KEY" ] && type cache_get >/dev/null 2>&1; then
+        local cache_key=$(cache_key_alpine_iso "virt" "$alpine_version" "$alpine_arch" "iso" 2>/dev/null || echo "")
+        if [ -n "$cache_key" ] && cache_get "alpine-iso" "$cache_key" "$alpine_iso"; then
+            echo "Using cached Alpine ISO: $alpine_iso"
+        fi
+    fi
+
+    # Download if not in cache
     if [ ! -f "$alpine_iso" ]; then
         echo "Downloading Alpine Linux ${alpine_version} (${alpine_arch})..."
-        curl -L "https://dl-cdn.alpinelinux.org/alpine/v${alpine_series}/releases/${alpine_arch}/${alpine_iso}" -o "$alpine_iso"
+        local iso_url="https://dl-cdn.alpinelinux.org/alpine/v${alpine_series}/releases/${alpine_arch}/${alpine_iso}"
+        curl -L "$iso_url" -o "$alpine_iso"
+
+        # Store in cache for next time
+        if [ -n "$cache_key" ] && type cache_put >/dev/null 2>&1; then
+            cache_put "alpine-iso" "$cache_key" "$alpine_iso"
+        fi
     fi
 
     # Extract kernel and initramfs
