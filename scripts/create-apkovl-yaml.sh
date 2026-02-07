@@ -212,6 +212,39 @@ download_k3s_binary() {
     echo "✅ k3s ${version} downloaded ($(du -h "$dest" | cut -f1))"
 }
 
+# Configure NFS client support
+# Enables rpcbind service if nfs-utils is included in overlay packages
+configure_nfs_client() {
+    local apkovl_dir="$1"
+    local config_file="$2"
+
+    # Check if nfs-utils is in overlay packages
+    local packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
+    local has_nfs_utils=0
+
+    while IFS= read -r pkg_name; do
+        [ -z "$pkg_name" ] && continue
+        if [ "$pkg_name" = "nfs-utils" ]; then
+            has_nfs_utils=1
+            break
+        fi
+    done <<< "$packages"
+
+    # If nfs-utils is included, enable rpcbind service
+    if [ "$has_nfs_utils" = "1" ]; then
+        echo "Configuring NFS client support..."
+
+        # Ensure rpcbind init script exists (from rpcbind-openrc package)
+        if [ -f "${apkovl_dir}/etc/init.d/rpcbind" ]; then
+            # Enable rpcbind in default runlevel
+            ln -sf /etc/init.d/rpcbind "${apkovl_dir}/etc/runlevels/default/rpcbind"
+            echo "  ✓ rpcbind service enabled for NFS client support"
+        else
+            echo "  ⚠️  Warning: rpcbind init script not found. Ensure rpcbind-openrc is in overlay_packages."
+        fi
+    fi
+}
+
 # Use the config file from environment, or from parameter, or default
 CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
@@ -276,6 +309,9 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
+
+    # Configure NFS client support if nfs-utils is included
+    configure_nfs_client "${NODE_NAME}-apkovl" "$CONFIG_FILE"
 
     # Download k3s binary for target architecture
     download_k3s_binary "${NODE_NAME}-apkovl" "$CONFIG_FILE"
