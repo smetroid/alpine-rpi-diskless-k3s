@@ -87,6 +87,12 @@ alpine:
     - "parted"
     - "e2fsprogs"
     - "chrony"  # NTP time synchronization (required for SSL/TLS)
+    # NFS client support (installed via apk for QEMU testing)
+    - "nfs-utils"
+    - "rpcbind"
+    - "keyutils"
+    - "libtirpc"
+    - "krb5-libs"
 
 storage:
   # Partition sizes (used by setup-bootable-device.sh for SD card preparation)
@@ -120,3 +126,7 @@ overlay_packages:
   - name: "libarchive"  # Archive library (needed by mke2fs)
   - name: "musl"  # C library and dynamic loader (ld-musl-x86_64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
+
+# Note: NFS client packages are in alpine.packages for QEMU testing
+# (installed via apk during boot since ISO doesn't extract /sbin from overlay)
+# For production RPi builds, they're in overlay_packages for instant availability
