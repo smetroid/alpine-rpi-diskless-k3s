@@ -221,6 +221,56 @@ setup_environment() {
     fi
 }
 
+# Create apkovl extract service for QEMU testing
+create_apkovl_extract_service() {
+    local apkovl_dir="$1"
+
+    mkdir -p "${apkovl_dir}/etc/init.d"
+    cat > "${apkovl_dir}/etc/init.d/apkovl-extract" << 'EOF'
+#!/sbin/openrc-run
+
+description="Extract apkovl overlay from FAT drive"
+name="apkovl extract"
+
+depend() {
+    need localmount
+    before qemu-device-setup
+    provide apkovl-extract
+}
+
+start() {
+    ebegin "Extracting apkovl overlay"
+
+    # Find the FAT drive with apkovl
+    for mount in /media/sdb1 /media/sda1 /media/cdrom; do
+        if [ -f "$mount"/*.apkovl.tar.gz ]; then
+            APOVL_FILE=$(ls "$mount"/*.apkovl.tar.gz | head -1)
+            einfo "Found apkovl: $APOVL_FILE"
+
+            # Extract to root filesystem
+            cd /
+            if tar -xzf "$APOVL_FILE" 2>/dev/null; then
+                einfo "Successfully extracted overlay"
+                eend 0
+                return 0
+            else
+                eerror "Failed to extract overlay"
+                eend 1
+                return 1
+            fi
+        fi
+    done
+
+    ewarn "No apkovl found on FAT drives"
+    eend 0  # Not fatal - system can boot without apkovl
+}
+EOF
+    chmod +x "${apkovl_dir}/etc/init.d/apkovl-extract"
+
+    mkdir -p "${apkovl_dir}/etc/runlevels/boot"
+    ln -sf /etc/init.d/apkovl-extract "${apkovl_dir}/etc/runlevels/boot/apkovl-extract"
+}
+
 # Create QEMU device setup service
 create_qemu_device_service() {
     local apkovl_dir="$1"
@@ -340,6 +390,9 @@ prepare_overlay() {
 
     # Add QEMU device setup service
     create_qemu_device_service "$temp_dir"
+
+    # Add apkovl extract service for ISO boot
+    create_apkovl_extract_service "$temp_dir"
 
     # Configure dual NICs for QEMU testing:
     # - eth0: Cluster network (static IP, VM-to-VM via socket, NO gateway)

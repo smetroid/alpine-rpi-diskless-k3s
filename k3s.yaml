@@ -116,3 +116,5 @@ overlay_packages:
   - name: "rpcbind-openrc"  # OpenRC init script for rpcbind
   - name: "keyutils"  # Key utilities for NFS authentication
   - name: "libevent"  # Event library (dependency for rpcbind)
+  - name: "libtirpc"  # TI-RPC library (required for rpcbind)
+  - name: "krb5-libs"  # Kerberos libraries (required for libtirpc GSSAPI support)
