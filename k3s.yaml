@@ -13,10 +13,10 @@ network:
   dns_servers:
     - "192.168.1.254"
 
-  # MetalLB LoadBalancer IP range
-  loadbalancer_pool:
-    start: "192.168.1.70"
-    end: "192.168.1.80"
+  ## MetalLB LoadBalancer IP range
+  #loadbalancer_pool:
+  #  start: "192.168.1.70"
+  #  end: "192.168.1.80"
 
 nodes:
   - name: "k3s-21"
@@ -35,9 +35,9 @@ nodes:
 
 k3s:
   # Services to disable (k3s defaults: servicelb, traefik)
-  #disable_services:
-  #  - "servicelb"
-  #  - "traefik"
+  disable_services:
+    - "servicelb"
+    #- "traefik"
 
   # External datastore for high availability (optional)
   # When enabled, all masters share the same backend database
@@ -59,16 +59,6 @@ k3s:
   cluster_cidr: "10.42.0.0/16"
   service_cidr: "10.43.0.0/16"
   flannel_backend: "vxlan"
-
-#services:
-#  metallb:
-#    enabled: true
-#    version: "v0.13.12"
-#
-#  nginx_ingress:
-#    enabled: true
-#    version: "v1.8.4"
-#    replicas: 2
 
 alpine:
   version: "3.22.1"
@@ -119,3 +109,10 @@ overlay_packages:
   - name: "libarchive"  # Archive library (needed by mke2fs)
   - name: "musl"  # C library and dynamic loader (ld-musl-aarch64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
+
+# NFS client support (for mounting from NAS via Kubernetes/Helm)
+  - name: "nfs-utils"  # NFS client utilities
+  - name: "rpcbind"  # RPC portmapper (required for NFS)
+  - name: "rpcbind-openrc"  # OpenRC init script for rpcbind
+  - name: "keyutils"  # Key utilities for NFS authentication
+  - name: "libevent"  # Event library (dependency for rpcbind)
