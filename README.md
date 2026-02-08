@@ -194,10 +194,91 @@ OpenRC services follow this dependency chain:
 
 ## Persistence Model
 
-The system uses Alpine's LBU (Local Backup Utility) combined with SD card persistence:
-- **Boot partition**: Alpine kernel and .apkovl overlay
-- **Data partition**: Persistent storage for k3s data, configuration backups
-- **Runtime overlays**: Dynamically saved configuration changes
+The system uses a multi-layered persistence strategy combining Alpine's LBU (Local Backup Utility) with bind mounts for critical data:
+
+### Storage Layers
+
+| Layer | Location | Contents | Persistence |
+|-------|----------|----------|-------------|
+| **RAM Overlay** | In-memory | Running system files | Lost on reboot |
+| **apkovl Archive** | SD card (boot partition) | Base configuration files | Reloaded each boot |
+| **Bind Mounts** | SD card (data partition) | Critical runtime data | Persists across reboots |
+| **LBU Backups** | SD card (data partition) | Configuration snapshots | Manual/triggered commits |
+
+### The storage-init Service
+
+The `storage-init` OpenRC service (runs on every boot) orchestrates all persistent storage:
+
+1. **Device Detection**: Auto-detects storage device (SD card, USB, virtio)
+2. **Partition Mounting**: Mounts data partition to `/mnt/data`
+3. **Bind Mount Creation**: Sets up persistent directories via bind mounts
+4. **Overlay Copy**: First-boot only - copies apkovl files to persistent storage
+5. **Marker File**: Creates `.copied-from-overlay` to prevent re-copy on subsequent boots
+
+### Persistent Directory Bind Mounts
+
+| Source (persistent) | Target (runtime) | Purpose |
+|---------------------|------------------|---------|
+| `/mnt/data/etc-rancher` | `/etc/rancher` | Rancher/k3s configs (entire directory) |
+| `/mnt/data/var-lib-rancher-k3s` | `/var/lib/rancher/k3s` | k3s database and state |
+| `/mnt/data/etc-lbu` | `/etc/lbu` | LBU configuration |
+| `/mnt/data/usr-local-bin` | `/usr/local/bin` | Custom scripts |
+| `/mnt/data/var-lib-chrony` | `/var/lib/chrony` | NTP drift file |
+| `/mnt/data/ssh` | - | SSH host keys (copied by ssh-persist) |
+
+**Why bind mounts instead of direct paths?**
+- Overlay files in apkovl are first-boot defaults
+- Bind mount shadows overlay, showing persisted data instead
+- k3s and services write directly to persistent storage
+- No manual sync needed - writes go straight to SD card
+
+### How Reboot Persistence Works
+
+**First Boot:**
+```
+1. Alpine loads kernel + apkovl into RAM
+2. storage-init runs:
+   - Mounts /mnt/data from SD card
+   - Copies /etc/rancher/* → /mnt/data/etc-rancher/ (first time only)
+   - Creates marker: /mnt/data/etc-rancher/.copied-from-overlay
+   - Bind mounts: /mnt/data/etc-rancher → /etc/rancher
+3. k3s starts, writes to /etc/rancher → actually writes to /mnt/data
+```
+
+**Subsequent Reboots:**
+```
+1. Alpine loads kernel + apkovl into RAM (fresh)
+2. storage-init runs:
+   - Mounts /mnt/data from SD card
+   - Sees .copied-from-overlay marker → skips copy
+   - Bind mounts: /mnt/data/etc-rancher → /etc/rancher
+3. Overlay files are hidden by bind mount
+4. k3s sees all its previous files from SD card
+```
+
+### LBU (Local Backup Utility) Backup
+
+The `lbu-persist` service provides configuration snapshot capability:
+
+**Triggered on:**
+- System shutdown/reboot
+- Manual: `/usr/local/bin/lbu-commit-runtime`
+
+**What gets backed up:**
+- Configuration-only changes (not large data)
+- Files modified outside bind-mount directories
+- Creates `runtime-{hostname}-{timestamp}.apkovl.tar.gz`
+
+**What's NOT backed up (already persisted via bind mounts):**
+- `/etc/rancher/*` → Already on `/mnt/data/etc-rancher`
+- `/var/lib/rancher/k3s/*` → Already on `/mnt/data/var-lib-rancher-k3s`
+- `/root/.ssh/*` → Already copied by ssh-persist service
+- SSH host keys → Already on `/mnt/data/ssh`
+
+**LBU is minimal because:**
+- Large data (k3s database) already persisted via bind mounts
+- Only captures small config changes made during runtime
+- Fast shutdown/reboot cycles
 
 ## Platform-Specific Notes
 

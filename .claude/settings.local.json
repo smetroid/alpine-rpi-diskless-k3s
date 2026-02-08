@@ -73,7 +73,15 @@
       "Bash(git push:*)",
       "Bash(__NEW_LINE_40c0e34b912e16b7__ echo \"\")",
       "Bash(pgrep:*)",
-      "Bash(ssh-keygen:*)"
+      "Bash(ssh-keygen:*)",
+      "Bash(git stash:*)",
+      "Bash(./test/qemu-test.sh:*)",
+      "WebSearch",
+      "Bash(sshpass -p ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost -p 2215 \"hostname; k3s --version; rc-service k3s status\")",
+      "Bash(curl:*)",
+      "Bash(CONFIG_FILE=qemu.yaml ./test/qemu-test.sh:*)",
+      "Bash(CONFIG_FILE=k3s.yaml ./test/qemu-test.sh stop:*)",
+      "Bash(head -6 echo \"\" echo \"qemu-test-1 \\(qemu.yaml\\):\" grep -A5 \"Setting up /etc/rancher\" builds-qemu/qemu-test-1-apkovl/etc/init.d/storage-init)"
     ],
     "deny": [],
     "ask": []
