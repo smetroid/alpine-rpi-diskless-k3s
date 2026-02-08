@@ -115,6 +115,127 @@ process_overlay_packages() {
     echo "Overlay packages processing complete"
 }
 
+# Generate auto-start service configuration
+# Creates a service that installs packages and starts services at boot
+generate_auto_start_services() {
+    local apkovl_dir="$1"
+    local config_file="$2"
+
+    local packages=$(yaml_get_array ".auto_start_services[]" "$config_file")
+
+    if [ -z "$packages" ]; then
+        echo "No auto-start services configured"
+        return 0
+    fi
+
+    echo "Generating auto-start services configuration..."
+
+    # Build packages list for the service script
+    local pkg_list=""
+    while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        pkg_list="$pkg_list $pkg"
+    done <<< "$packages"
+
+    # Trim leading space
+    pkg_list=$(echo "$pkg_list" | sed 's/^ //')
+
+    if [ -z "$pkg_list" ]; then
+        echo "  No packages to configure"
+        return 0
+    fi
+
+    echo "  Configuring: $pkg_list"
+
+    # Create the auto-start service script
+    cat > "${apkovl_dir}/etc/init.d/auto-start-services" <<'SERVICE_SCRIPT'
+#!/sbin/openrc-run
+
+# Auto-start services - installs packages and starts services at boot
+# Generated from cluster-config.yaml auto_start_services section
+
+description="Install and start configured services"
+
+depend() {
+    need net
+    after firewall storage-init
+    before k3s-bootstrap
+}
+
+start() {
+    ebegin "Installing and starting auto-start services"
+
+    local failed=0
+    # Packages to install (injected during build)
+    PACKAGES="__PACKAGES__"
+
+    for pkg in $PACKAGES; do
+        # Skip empty entries
+        [ -z "$pkg" ] && continue
+
+        # Package already installed? Skip installation
+        if apk info -e "$pkg" >/dev/null 2>&1; then
+            einfo "$pkg already installed"
+        else
+            # Try installation, but don't fail hard
+            einfo "Installing $pkg..."
+            if ! apk add -q "$pkg"; then
+                ewarn "Failed to install $pkg (will retry next boot)"
+                failed=1
+                continue
+            fi
+        fi
+
+        # Derive service name from package name
+        svc=$(derive_service_name "$pkg")
+
+        # Service exists? Start it
+        if [ -f "/etc/init.d/$svc" ]; then
+            if rc-service "$svc" status >/dev/null 2>&1; then
+                einfo "$svc already running"
+            else
+                einfo "Starting $svc..."
+                if ! rc-service "$svc" start; then
+                    ewarn "Failed to start $svc"
+                fi
+            fi
+        else
+            einfo "No service found for $pkg (package-only)"
+        fi
+    done
+
+    # Always return success - boot should continue even if one service fails
+    eend 0
+}
+
+derive_service_name() {
+    local pkg="$1"
+    case "$pkg" in
+        nfs-utils)      echo "nfs" ;;
+        chrony)         echo "chronyd" ;;
+        acpid)          echo "acpid" ;;
+        syslog)         echo "syslog" ;;
+        cron)           echo "crond" ;;
+        sshd)           echo "sshd" ;;
+        *)
+            # Fallback: strip common suffixes
+            echo "$pkg" | sed 's/-utils$//' | sed 's/-openrc$//'
+            ;;
+    esac
+}
+SERVICE_SCRIPT
+
+    # Replace placeholder with actual packages list
+    sed -i "s/__PACKAGES__/$pkg_list/g" "${apkovl_dir}/etc/init.d/auto-start-services"
+
+    chmod +x "${apkovl_dir}/etc/init.d/auto-start-services"
+
+    # Enable in default runlevel
+    ln -sf /etc/init.d/auto-start-services "${apkovl_dir}/etc/runlevels/default/auto-start-services"
+
+    echo "  ✓ auto-start-services service created and enabled"
+}
+
 # Download k3s binary for target architecture
 # Downloads from GitHub releases and places in apkovl /usr/local/bin/k3s
 download_k3s_binary() {
