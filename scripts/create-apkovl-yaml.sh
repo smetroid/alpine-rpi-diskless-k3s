@@ -398,6 +398,9 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
 
+    # Generate auto-start services configuration
+    generate_auto_start_services "${NODE_NAME}-apkovl" "$CONFIG_FILE"
+
     # Download k3s binary for target architecture
     download_k3s_binary "${NODE_NAME}-apkovl" "$CONFIG_FILE"
 
