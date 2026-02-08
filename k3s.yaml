@@ -123,5 +123,6 @@ overlay_packages:
 # Each package will be installed via 'apk add' and its service started automatically
 # Service dependencies (like rpcbind for nfs) are handled by OpenRC
 auto_start_services:
+  - "rpcbind"     # RPC portmapper (required for NFS)
   - "nfs-utils"   # Installs package, starts 'nfs' service
   - "chrony"      # Installs package, starts 'chronyd' service
