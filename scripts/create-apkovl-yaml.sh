@@ -205,6 +205,12 @@ start() {
                     ewarn "Failed to start $svc"
                 fi
             fi
+
+            # rpcbind needs a moment to be ready before dependent services can start
+            if [ "$svc" = "rpcbind" ]; then
+                einfo "Waiting for rpcbind to be ready..."
+                sleep 1
+            fi
         else
             einfo "No service found for $pkg (package-only)"
         fi
@@ -661,7 +667,8 @@ EOF
     ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
     # CRITICAL: Enable networking service for network connectivity
     ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
-    # Note: chronyd is enabled at runtime by system-bootstrap after chrony package is installed
+    # Enable chronyd for NTP time synchronization (chrony package is in overlay)
+    ln -sf /etc/init.d/chronyd "${NODE_NAME}-apkovl/etc/runlevels/default/chronyd"
     # Enable storage-init service to run before system-bootstrap
     ln -sf /etc/init.d/storage-init "${NODE_NAME}-apkovl/etc/runlevels/default/storage-init"
     # Enable ssh-persist service to run after storage-init (idempotent SSH on every boot)
