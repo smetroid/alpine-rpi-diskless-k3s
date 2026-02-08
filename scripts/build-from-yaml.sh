@@ -345,7 +345,6 @@ etc/sysctl.d/*
 etc/timezone
 etc/localtime
 etc/machine-id
-etc/k3s
 etc/init.d/k3s
 etc/runlevels/default/k3s
 etc/lbu/lbu.conf

@@ -402,7 +402,7 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE..."
     
     # Create directory structure
-    mkdir -p "${NODE_NAME}-apkovl"/{etc/{apk,network,ssh,runlevels/{default,boot,sysinit},init.d,k3s,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
+    mkdir -p "${NODE_NAME}-apkovl"/{etc/{apk,network,ssh,runlevels/{default,boot,sysinit},init.d,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
 
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
