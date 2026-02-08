@@ -201,15 +201,30 @@ start() {
                 einfo "$svc already running"
             else
                 einfo "Starting $svc..."
-                if ! rc-service "$svc" start; then
-                    ewarn "Failed to start $svc"
-                fi
-            fi
 
-            # rpcbind needs a moment to be ready before dependent services can start
-            if [ "$svc" = "rpcbind" ]; then
-                einfo "Waiting for rpcbind to be ready..."
-                sleep 1
+                # Retry logic for services that might fail due to timing
+                local max_retries=3
+                local retry_delay=2
+                local retry_count=0
+                local started=false
+
+                while [ $retry_count -lt $max_retries ] && [ "$started" = "false" ]; do
+                    if rc-service "$svc" start >/dev/null 2>&1; then
+                        started=true
+                        einfo "Started $svc successfully"
+                        break
+                    else
+                        retry_count=$((retry_count + 1))
+                        if [ $retry_count -lt $max_retries ]; then
+                            einfo "Retry $retry_count/$max_retries for $svc..."
+                            sleep $retry_delay
+                        fi
+                    fi
+                done
+
+                if [ "$started" = "false" ]; then
+                    ewarn "Failed to start $svc after $max_retries attempts"
+                fi
             fi
         else
             einfo "No service found for $pkg (package-only)"
@@ -667,8 +682,7 @@ EOF
     ln -sf /etc/init.d/local "${NODE_NAME}-apkovl/etc/runlevels/default/local"
     # CRITICAL: Enable networking service for network connectivity
     ln -sf /etc/init.d/networking "${NODE_NAME}-apkovl/etc/runlevels/default/networking"
-    # Enable chronyd for NTP time synchronization (chrony package is in overlay)
-    ln -sf /etc/init.d/chronyd "${NODE_NAME}-apkovl/etc/runlevels/default/chronyd"
+    # Note: chronyd is enabled at runtime by system-bootstrap after chrony package is installed
     # Enable storage-init service to run before system-bootstrap
     ln -sf /etc/init.d/storage-init "${NODE_NAME}-apkovl/etc/runlevels/default/storage-init"
     # Enable ssh-persist service to run after storage-init (idempotent SSH on every boot)
@@ -1274,6 +1288,64 @@ EOF
 
     # Enable lbu-persist service (lbu-restore not needed - Alpine auto-loads apkovl)
     ln -sf /etc/init.d/lbu-persist "${NODE_NAME}-apkovl/etc/runlevels/default/lbu-persist"
+
+    # Create late-services OpenRC service (starts services after everything is up)
+    cat > "${NODE_NAME}-apkovl/etc/init.d/late-services" << 'EOF'
+#!/sbin/openrc-run
+
+description="Late services - start after system is fully up"
+name="late services"
+
+depend() {
+    need k3s
+    after k3s
+    provide late-services
+}
+
+start() {
+    ebegin "Starting late services"
+
+    # Install nfs-utils (provides NFS init scripts and binaries)
+    einfo "Installing nfs-utils..."
+    apk add -q nfs-utils
+
+    # Create required directories for NFS
+    einfo "Creating NFS directories..."
+    mkdir -p /var/lib/nfs/sm
+
+    # Enable NFS services in default runlevel
+    einfo "Enabling NFS services..."
+    rc-update add rpc.statd default >/dev/null 2>&1
+    rc-update add nfs default >/dev/null 2>&1
+
+    # Start rpc.statd first (required by NFS)
+    einfo "Starting rpc.statd..."
+    if ! rc-service rpc.statd status >/dev/null 2>&1; then
+        rc-service rpc.statd start
+    fi
+
+    # Wait for rpc.statd to be ready
+    sleep 2
+
+    # Start NFS server
+    einfo "Starting NFS server..."
+    if ! rc-service nfs status >/dev/null 2>&1; then
+        rc-service nfs start
+    fi
+
+    eend 0
+}
+
+stop() {
+    # Nothing to do on stop
+    ebegin "Stopping late services"
+    eend 0
+}
+EOF
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/late-services"
+
+    # Enable late-services in default runlevel (runs after k3s)
+    ln -sf /etc/init.d/late-services "${NODE_NAME}-apkovl/etc/runlevels/default/late-services"
 
 done
 

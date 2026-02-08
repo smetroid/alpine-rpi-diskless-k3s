@@ -113,8 +113,7 @@ overlay_packages:
 # Services to auto-start at every boot
 # Each package will be installed via 'apk add' and its service started automatically
 # IMPORTANT: Order matters! Dependencies must come before dependent services
-# NOTE: Don't include packages already in overlay_packages (chrony, openssh)
 auto_start_services:
   - "rpcbind"     # RPC portmapper - required by nfs
-  - "nfs-utils"   # NFS server - depends on rpcbind
-  # chrony is in overlay_packages, enabled below
+  - "chrony"      # NTP time synchronization
+  # nfs-utils is started by late-services (after k3s is up)
