@@ -226,7 +226,9 @@ derive_service_name() {
 SERVICE_SCRIPT
 
     # Replace placeholder with actual packages list
-    sed -i "s/__PACKAGES__/$pkg_list/g" "${apkovl_dir}/etc/init.d/auto-start-services"
+    # Use portable sed syntax (works on both Linux and macOS)
+    sed "s/__PACKAGES__/$pkg_list/g" "${apkovl_dir}/etc/init.d/auto-start-services" > "${apkovl_dir}/etc/init.d/auto-start-services.tmp" && \
+    mv "${apkovl_dir}/etc/init.d/auto-start-services.tmp" "${apkovl_dir}/etc/init.d/auto-start-services"
 
     chmod +x "${apkovl_dir}/etc/init.d/auto-start-services"
 
