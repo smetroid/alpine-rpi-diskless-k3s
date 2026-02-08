@@ -189,8 +189,14 @@ start() {
         # Derive service name from package name
         svc=$(derive_service_name "$pkg")
 
-        # Service exists? Start it
+        # Service exists? Enable and start it
         if [ -f "/etc/init.d/$svc" ]; then
+            # Enable service in default runlevel (ensures proper dependency tracking)
+            if ! rc-update show default | grep -q "$svc"; then
+                einfo "Enabling $svc in default runlevel..."
+                rc-update add "$svc" default >/dev/null 2>&1
+            fi
+
             if rc-service "$svc" status >/dev/null 2>&1; then
                 einfo "$svc already running"
             else
@@ -213,6 +219,7 @@ derive_service_name() {
     case "$pkg" in
         nfs-utils)      echo "nfs" ;;
         chrony)         echo "chronyd" ;;
+        rpcbind)        echo "rpcbind" ;;
         acpid)          echo "acpid" ;;
         syslog)         echo "syslog" ;;
         cron)           echo "crond" ;;
