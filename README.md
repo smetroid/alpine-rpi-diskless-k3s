@@ -104,6 +104,42 @@ The cluster is configured through YAML files. Key configuration sections include
 - Boot-time service startup order
 - Custom service scripts
 
+### Auto-Start Services
+
+The `auto_start_services` block allows you to specify packages that should be installed at every boot and have their services automatically started. This is useful for services like NFS that need to be available before k3s starts.
+
+```yaml
+auto_start_services:
+  - "nfs-utils"   # NFS client utilities, starts 'nfs' service
+  - "chrony"      # NTP daemon, starts 'chronyd' service
+```
+
+**How it works:**
+1. At boot, the `auto-start-services` OpenRC service runs
+2. Each package is installed via `apk add` (if not already installed)
+3. The service is enabled in the default runlevel via `rc-update add`
+4. The service is started via `rc-service start`
+5. Service dependencies are handled automatically by OpenRC (e.g., nfs starts rpcbind)
+
+**Package-to-service mappings:**
+| Package | Service | Notes |
+|---------|---------|-------|
+| `nfs-utils` | `nfs` | Auto-starts rpcbind as dependency |
+| `chrony` | `chronyd` | NTP time synchronization |
+| `rpcbind` | `rpcbind` | RPC portmapper (usually started as dependency) |
+| `acpid` | `acpid` | ACPI events |
+| `*-utils` | `*` | Strips `-utils` suffix |
+| `*-openrc` | `*` | Strips `-openrc` suffix |
+
+If a package has no corresponding service, it is still installed but no service is started.
+
+**Example manual workflow (what auto_start_services automates):**
+```bash
+apk add nfs-utils
+rc-update add nfs      # Enable in default runlevel
+rc-service nfs start   # Start the service
+```
+
 ## Development
 
 ### Build Commands
