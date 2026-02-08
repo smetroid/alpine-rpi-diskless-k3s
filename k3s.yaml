@@ -110,18 +110,11 @@ overlay_packages:
   - name: "musl"  # C library and dynamic loader (ld-musl-aarch64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
 
-# NFS client support (for mounting from NAS via Kubernetes/Helm)
-  - name: "nfs-utils"  # NFS client utilities
-  - name: "rpcbind"  # RPC portmapper (required for NFS)
-  - name: "rpcbind-openrc"  # OpenRC init script for rpcbind
-  - name: "keyutils"  # Key utilities for NFS authentication
-  - name: "libevent"  # Event library (dependency for rpcbind)
-  - name: "libtirpc"  # TI-RPC library (required for rpcbind)
-  - name: "krb5-libs"  # Kerberos libraries (required for libtirpc GSSAPI support)
-
 # Services to auto-start at every boot
 # Each package will be installed via 'apk add' and its service started automatically
-# Service dependencies (like rpcbind for nfs) are handled by OpenRC
+# IMPORTANT: Order matters! Dependencies must come before dependent services
+# NOTE: Don't include packages already in overlay_packages (chrony, openssh)
 auto_start_services:
-  - "nfs-utils"   # Installs package, starts 'nfs' service (rpcbind starts automatically)
-  - "chrony"      # Installs package, starts 'chronyd' service
+  - "rpcbind"     # RPC portmapper - required by nfs
+  - "nfs-utils"   # NFS server - depends on rpcbind
+  # chrony is in overlay_packages, enabled below
