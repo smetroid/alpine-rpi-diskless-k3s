@@ -212,39 +212,6 @@ download_k3s_binary() {
     echo "✅ k3s ${version} downloaded ($(du -h "$dest" | cut -f1))"
 }
 
-# Configure NFS client support
-# Enables rpcbind service if nfs-utils is included in overlay packages
-configure_nfs_client() {
-    local apkovl_dir="$1"
-    local config_file="$2"
-
-    # Check if nfs-utils is in overlay packages
-    local packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
-    local has_nfs_utils=0
-
-    while IFS= read -r pkg_name; do
-        [ -z "$pkg_name" ] && continue
-        if [ "$pkg_name" = "nfs-utils" ]; then
-            has_nfs_utils=1
-            break
-        fi
-    done <<< "$packages"
-
-    # If nfs-utils is included, enable rpcbind service
-    if [ "$has_nfs_utils" = "1" ]; then
-        echo "Configuring NFS client support..."
-
-        # Ensure rpcbind init script exists (from rpcbind-openrc package)
-        if [ -f "${apkovl_dir}/etc/init.d/rpcbind" ]; then
-            # Enable rpcbind in default runlevel
-            ln -sf /etc/init.d/rpcbind "${apkovl_dir}/etc/runlevels/default/rpcbind"
-            echo "  ✓ rpcbind service enabled for NFS client support"
-        else
-            echo "  ⚠️  Warning: rpcbind init script not found. Ensure rpcbind-openrc is in overlay_packages."
-        fi
-    fi
-}
-
 # Use the config file from environment, or from parameter, or default
 CONFIG_FILE="${CONFIG_FILE:-${1:-cluster-config.yaml}}"
 
@@ -309,9 +276,6 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 
     # Process overlay packages from YAML config
     process_overlay_packages "${NODE_NAME}-apkovl" "$CONFIG_FILE"
-
-    # Configure NFS client support if nfs-utils is included
-    configure_nfs_client "${NODE_NAME}-apkovl" "$CONFIG_FILE"
 
     # Download k3s binary for target architecture
     download_k3s_binary "${NODE_NAME}-apkovl" "$CONFIG_FILE"
@@ -872,20 +836,24 @@ start() {
         eend $? "/var/lib/chrony mount"
     fi
 
-    # Set up k3s config bind mount to persistent storage
-    mkdir -p /mnt/data/k3s /mnt/data/var-lib-rancher-k3s
-    mkdir -p /etc/rancher/k3s /var/lib/rancher/k3s
+    # Set up rancher config bind mount to persistent storage
+    # Persist entire /etc/rancher directory (not just k3s subdirectory)
+    # This supports k3s, Rancher Desktop, and other Rancher products
+    mkdir -p /mnt/data/etc-rancher /mnt/data/var-lib-rancher-k3s
+    mkdir -p /etc/rancher /var/lib/rancher/k3s
 
-    # Copy overlay k3s config to persistent storage if it doesn't exist there
-    if [ -f /etc/rancher/k3s/config.yaml ] && [ ! -f /mnt/data/k3s/config.yaml ]; then
-        einfo "Copying overlay k3s config to persistent storage"
-        cp /etc/rancher/k3s/config.yaml /mnt/data/k3s/config.yaml
+    # Copy overlay rancher configs to persistent storage if they don't exist there
+    # This preserves k3s config.yaml and any other files in /etc/rancher from the overlay
+    if [ -d /etc/rancher ] && [ "$(ls -A /etc/rancher 2>/dev/null)" ] && [ ! -f /mnt/data/etc-rancher/.copied-from-overlay ]; then
+        einfo "Copying overlay rancher configs to persistent storage"
+        cp -a /etc/rancher/* /mnt/data/etc-rancher/ 2>/dev/null || true
+        touch /mnt/data/etc-rancher/.copied-from-overlay
     fi
 
-    if ! mountpoint -q /etc/rancher/k3s 2>/dev/null; then
-        einfo "Setting up /etc/rancher/k3s on persistent storage"
-        mount --bind /mnt/data/k3s /etc/rancher/k3s
-        eend $? "/etc/rancher/k3s mount"
+    if ! mountpoint -q /etc/rancher 2>/dev/null; then
+        einfo "Setting up /etc/rancher on persistent storage"
+        mount --bind /mnt/data/etc-rancher /etc/rancher
+        eend $? "/etc/rancher mount"
     fi
 
     if ! mountpoint -q /var/lib/rancher/k3s 2>/dev/null; then
