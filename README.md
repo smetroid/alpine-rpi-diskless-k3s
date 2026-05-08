@@ -1,6 +1,11 @@
 # Alpine Linux Diskless k3s Cluster
 
-A system for creating multi-node Kubernetes clusters running entirely from RAM on Raspberry Pi, with persistent storage on SD cards. Uses YAML-based configuration for easy customization and deployment automation.
+[![CI](https://github.com/smetroid/diskless-alpine-k3s-rpi/actions/workflows/ci.yml/badge.svg)](https://github.com/smetroid/diskless-alpine-k3s-rpi/actions/workflows/ci.yml)
+[![k3s](https://img.shields.io/badge/k3s-v1.35.0%2Bk3s1-blue)](https://k3s.io)
+[![Alpine](https://img.shields.io/badge/Alpine-3.22-brightgreen)](https://alpinelinux.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+
+Designed for edge Kubernetes deployments where disk I/O reliability is a concern — runs entirely from RAM with only critical state persisted to SD card.
 
 ## Overview
 
