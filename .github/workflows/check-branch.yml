@@ -1,0 +1,24 @@
+name: Check Pull Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-branch:
+    name: Check Branch Name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name
+        run: |
+          BRANCH_NAME=${{ github.head_ref }}
+          echo "Branch: $BRANCH_NAME"
+          
+          # Allow main, develop, release/*, or feature/*, fix/*, docs/*
+          if [[ "$BRANCH_NAME" =~ ^(main|develop|release/[0-9]+\.[0-9]+|feature/.+|fix/.+|docs/.+)$ ]]; then
+            echo "Branch name is valid"
+            exit 0
+          fi
+          
+          echo "Branch name should be: main, develop, release/x.y, feature/..., fix/..., docs/..."
+          exit 1

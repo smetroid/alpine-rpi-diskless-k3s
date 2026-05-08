@@ -127,13 +127,8 @@ overlay_packages:
   - name: "musl"  # C library and dynamic loader (ld-musl-x86_64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
 
-# Note: NFS client packages are in alpine.packages for QEMU testing
-# (installed via apk during boot since ISO doesn't extract /sbin from overlay)
-# For production RPi builds, they're in overlay_packages for instant availability
-
 # Services to auto-start at every boot
 # Each package will be installed via 'apk add' and its service started automatically
 # Service dependencies (like rpcbind for nfs) are handled by OpenRC
 auto_start_services:
   - "nfs-utils"   # Installs package, starts 'nfs' service (rpcbind starts automatically)
-  - "chrony"      # Installs package, starts 'chronyd' service
