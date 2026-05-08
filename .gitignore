@@ -53,3 +53,10 @@ id_ed25519*
 test/qemu-cluster/
 test/vm-*.log
 test/*.pid
+
+# Kernel and initramfs files (downloaded for QEMU testing)
+vmlinuz-*
+initramfs-*
+
+# Claude AI project files
+.claude/

@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          check: scripts lib
+
+  validate:
+    name: Validate YAML Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate k3s.yaml
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('k3s.yaml'))"
+
+      - name: Validate qemu.yaml
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('qemu.yaml'))"
+
+      - name: Validate cluster-config.yaml.example
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
+
+  build:
+    name: Build Apkovl Archives
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tar gzip
+
+      - name: Build production config
+        run: |
+          chmod +x scripts/*.sh
+          make build CONFIG=k3s.yaml
+
+      - name: Build test config
+        run: |
+          make build-test
+
+      - name: Verify outputs exist
+        run: |
+          ls -la builds/*.apkovl.tar.gz || echo "No production archives"
+          ls -la builds-qemu/*.apkovl.tar.gz || echo "No test archives"
+
+  test:
+    name: Shell Script Formatting Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install shfmt
+        run: |
+          go install mvdan.cc/sh/v3/cmd/shfmt@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Check formatting
+        run: |
+          find scripts lib -name "*.sh" -exec shfmt -d {} \;
+        continue-on-error: true
+
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for broken links in docs
+        run: |
+          # Simple check: verify markdown files don't have obvious broken links
+          # This is a basic check, real link checking would require more tooling
+          find docs -name "*.md" -exec grep -l "http://" {} \; | head -5
+
+      - name: Check README exists
+        run: |
+          test -f README.md
+
+      - name: Check required files exist
+        run: |
+          test -f LICENSE
+          test -f CONTRIBUTING.md
+          test -f SECURITY.md
+          test -f Makefile

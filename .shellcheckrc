@@ -1,0 +1,26 @@
+# ShellCheck configuration
+# https://www.shellcheck.net/
+
+# Disable SC1090 (can't follow non-constant source)
+disable=SC1090
+
+# Disable SC1091 (not following sourced file)
+disable=SC1091
+
+# Disable SC2086 (double quote to prevent globbing)
+# This is a common pattern in shell scripts
+disable=SC2086
+
+# Source paths that should be ignored (generated/mock files)
+source-path=(
+    lib/
+    scripts/
+)
+
+# Exclude specific files from checking
+exclude=(
+    builds/
+    builds-qemu/
+    .cache/
+    test/qemu-cluster/
+)

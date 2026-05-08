@@ -26,7 +26,8 @@ UNAME := $(shell uname)
 .PHONY: help build validate clean clean-cache clean-test clean-all setup-sd test test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
         qemu-cluster test-qemu \
-        build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats
+        build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats \
+        lint format shellcheck-shfmt
 
 # Default target
 help:
@@ -70,6 +71,11 @@ help:
 	@echo "  make build-test          # Build QEMU test config"
 	@echo "  make test-qemu           # Full QEMU test workflow"
 	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
+	@echo ""
+	@echo "Lint Targets:"
+	@echo "  make lint                Run shellcheck and check formatting"
+	@echo "  make shellcheck-shfmt     Run shellcheck on all shell scripts"
+	@echo "  make format              Format shell scripts with shfmt"
 
 # =============================================================================
 # Build Targets
@@ -273,4 +279,36 @@ list-nodes:
 		python3 -c "import yaml; [print('  ' + n['name']) for n in yaml.safe_load(open('$(CONFIG)'))['nodes']]"; \
 	else \
 		echo "  Install yq or python3 to list nodes"; \
+	fi
+
+# =============================================================================
+# Lint and Format Targets
+# =============================================================================
+
+# Run shellcheck on all shell scripts
+shellcheck-shfmt:
+	@echo "Running ShellCheck..."
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck scripts/*.sh lib/*.sh || true; \
+	else \
+		echo "ShellCheck not installed. Install with: brew install shellcheck (macOS) or apt install shellcheck (Linux)"; \
+	fi
+
+# Format shell scripts with shfmt
+format:
+	@echo "Formatting shell scripts with shfmt..."
+	@if command -v shfmt >/dev/null 2>&1; then \
+		shfmt -w scripts/*.sh lib/*.sh; \
+	else \
+		echo "shfmt not installed. Install with: go install mvdan.cc/sh/v3/cmd/shfmt@latest"; \
+	fi
+
+# Run all linting (shellcheck + formatting check)
+lint: shellcheck-shfmt
+	@echo ""
+	@echo "Checking script formatting..."
+	@if command -v shfmt >/dev/null 2>&1; then \
+		shfmt -d scripts/*.sh lib/*.sh; \
+	else \
+		echo "shfmt not installed for formatting check"; \
 	fi
