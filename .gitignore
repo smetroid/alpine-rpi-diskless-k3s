@@ -60,3 +60,10 @@ initramfs-*
 
 # Claude AI project files
 .claude/
+
+# Local tools (auto-downloaded binaries)
+.local/
+
+# Reference backups for template verification
+builds-reference/
+builds-qemu-reference/

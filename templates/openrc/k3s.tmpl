@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+description="k3s Kubernetes {{ if eq .Env.NODE_ROLE "master" }}server (master){{ else }}agent (worker){{ end }}"
+name=k3s
+command="/usr/local/bin/k3s"
+command_args="{{ if eq .Env.NODE_ROLE "master" }}server{{ else }}agent{{ end }} \
+    >>/var/log/k3s.log 2>&1"
+
+supervisor=supervise-daemon
+output_log=/var/log/k3s.log
+error_log=/var/log/k3s.log
+pidfile="/var/run/k3s.pid"
+respawn_delay=5
+respawn_max=0
+
+depend() {
+    after network-online
+    want cgroups
+}
+
+start_pre() {
+    rm -f /tmp/k3s.*
+}
+
+set -o allexport
+if [ -f /etc/environment ]; then . /etc/environment; fi
+if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
+set +o allexport

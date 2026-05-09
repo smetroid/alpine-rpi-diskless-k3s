@@ -1,0 +1,102 @@
+#!/sbin/openrc-run
+
+# Auto-start services - installs packages and starts services at boot
+# Generated from cluster-config.yaml auto_start_services section
+
+description="Install and start configured services"
+
+depend() {
+    need net
+    after firewall storage-init
+    before k3s-bootstrap
+}
+
+start() {
+    ebegin "Installing and starting auto-start services"
+
+    local failed=0
+    # Packages to install (injected during build)
+    PACKAGES="{{ .Env.PACKAGES }}"
+
+    for pkg in $PACKAGES; do
+        # Skip empty entries
+        [ -z "$pkg" ] && continue
+
+        # Package already installed? Skip installation
+        if apk info -e "$pkg" >/dev/null 2>&1; then
+            einfo "$pkg already installed"
+        else
+            # Try installation, but don't fail hard
+            einfo "Installing $pkg..."
+            if ! apk add -q "$pkg"; then
+                ewarn "Failed to install $pkg (will retry next boot)"
+                failed=1
+                continue
+            fi
+        fi
+
+        # Derive service name from package name
+        svc=$(derive_service_name "$pkg")
+
+        # Service exists? Enable and start it
+        if [ -f "/etc/init.d/$svc" ]; then
+            # Enable service in default runlevel (ensures proper dependency tracking)
+            if ! rc-update show default | grep -q "$svc"; then
+                einfo "Enabling $svc in default runlevel..."
+                rc-update add "$svc" default >/dev/null 2>&1
+            fi
+
+            if rc-service "$svc" status >/dev/null 2>&1; then
+                einfo "$svc already running"
+            else
+                einfo "Starting $svc..."
+
+                # Retry logic for services that might fail due to timing
+                local max_retries=3
+                local retry_delay=2
+                local retry_count=0
+                local started=false
+
+                while [ $retry_count -lt $max_retries ] && [ "$started" = "false" ]; do
+                    if rc-service "$svc" start >/dev/null 2>&1; then
+                        started=true
+                        einfo "Started $svc successfully"
+                        break
+                    else
+                        retry_count=$((retry_count + 1))
+                        if [ $retry_count -lt $max_retries ]; then
+                            einfo "Retry $retry_count/$max_retries for $svc..."
+                            sleep $retry_delay
+                        fi
+                    fi
+                done
+
+                if [ "$started" = "false" ]; then
+                    ewarn "Failed to start $svc after $max_retries attempts"
+                fi
+            fi
+        else
+            einfo "No service found for $pkg (package-only)"
+        fi
+    done
+
+    # Always return success - boot should continue even if one service fails
+    eend 0
+}
+
+derive_service_name() {
+    local pkg="$1"
+    case "$pkg" in
+        nfs-utils)      echo "nfs" ;;
+        chrony)         echo "chronyd" ;;
+        rpcbind)        echo "rpcbind" ;;
+        acpid)          echo "acpid" ;;
+        syslog)         echo "syslog" ;;
+        cron)           echo "crond" ;;
+        sshd)           echo "sshd" ;;
+        *)
+            # Fallback: strip common suffixes
+            echo "$pkg" | sed 's/-utils$//' | sed 's/-openrc$//'
+            ;;
+    esac
+}

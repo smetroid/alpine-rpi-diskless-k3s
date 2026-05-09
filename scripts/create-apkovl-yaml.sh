@@ -12,6 +12,9 @@ LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
 # Load cache library
 source "$LIB_DIR/cache.sh"
 
+# Load template rendering library
+source "$LIB_DIR/templates.sh"
+
 # Function to discover package version from APKINDEX
 # Returns the version string for the given package name
 discover_package_version() {
@@ -147,117 +150,8 @@ generate_auto_start_services() {
 
     echo "  Configuring: $pkg_list"
 
-    # Create the auto-start service script
-    cat > "${apkovl_dir}/etc/init.d/auto-start-services" <<'SERVICE_SCRIPT'
-#!/sbin/openrc-run
-
-# Auto-start services - installs packages and starts services at boot
-# Generated from cluster-config.yaml auto_start_services section
-
-description="Install and start configured services"
-
-depend() {
-    need net
-    after firewall storage-init
-    before k3s-bootstrap
-}
-
-start() {
-    ebegin "Installing and starting auto-start services"
-
-    local failed=0
-    # Packages to install (injected during build)
-    PACKAGES="__PACKAGES__"
-
-    for pkg in $PACKAGES; do
-        # Skip empty entries
-        [ -z "$pkg" ] && continue
-
-        # Package already installed? Skip installation
-        if apk info -e "$pkg" >/dev/null 2>&1; then
-            einfo "$pkg already installed"
-        else
-            # Try installation, but don't fail hard
-            einfo "Installing $pkg..."
-            if ! apk add -q "$pkg"; then
-                ewarn "Failed to install $pkg (will retry next boot)"
-                failed=1
-                continue
-            fi
-        fi
-
-        # Derive service name from package name
-        svc=$(derive_service_name "$pkg")
-
-        # Service exists? Enable and start it
-        if [ -f "/etc/init.d/$svc" ]; then
-            # Enable service in default runlevel (ensures proper dependency tracking)
-            if ! rc-update show default | grep -q "$svc"; then
-                einfo "Enabling $svc in default runlevel..."
-                rc-update add "$svc" default >/dev/null 2>&1
-            fi
-
-            if rc-service "$svc" status >/dev/null 2>&1; then
-                einfo "$svc already running"
-            else
-                einfo "Starting $svc..."
-
-                # Retry logic for services that might fail due to timing
-                local max_retries=3
-                local retry_delay=2
-                local retry_count=0
-                local started=false
-
-                while [ $retry_count -lt $max_retries ] && [ "$started" = "false" ]; do
-                    if rc-service "$svc" start >/dev/null 2>&1; then
-                        started=true
-                        einfo "Started $svc successfully"
-                        break
-                    else
-                        retry_count=$((retry_count + 1))
-                        if [ $retry_count -lt $max_retries ]; then
-                            einfo "Retry $retry_count/$max_retries for $svc..."
-                            sleep $retry_delay
-                        fi
-                    fi
-                done
-
-                if [ "$started" = "false" ]; then
-                    ewarn "Failed to start $svc after $max_retries attempts"
-                fi
-            fi
-        else
-            einfo "No service found for $pkg (package-only)"
-        fi
-    done
-
-    # Always return success - boot should continue even if one service fails
-    eend 0
-}
-
-derive_service_name() {
-    local pkg="$1"
-    case "$pkg" in
-        nfs-utils)      echo "nfs" ;;
-        chrony)         echo "chronyd" ;;
-        rpcbind)        echo "rpcbind" ;;
-        acpid)          echo "acpid" ;;
-        syslog)         echo "syslog" ;;
-        cron)           echo "crond" ;;
-        sshd)           echo "sshd" ;;
-        *)
-            # Fallback: strip common suffixes
-            echo "$pkg" | sed 's/-utils$//' | sed 's/-openrc$//'
-            ;;
-    esac
-}
-SERVICE_SCRIPT
-
-    # Replace placeholder with actual packages list
-    # Use portable sed syntax (works on both Linux and macOS)
-    sed "s/__PACKAGES__/$pkg_list/g" "${apkovl_dir}/etc/init.d/auto-start-services" > "${apkovl_dir}/etc/init.d/auto-start-services.tmp" && \
-    mv "${apkovl_dir}/etc/init.d/auto-start-services.tmp" "${apkovl_dir}/etc/init.d/auto-start-services"
-
+    export PACKAGES="$pkg_list"
+    render_template "openrc/auto-start-services.tmpl" "${apkovl_dir}/etc/init.d/auto-start-services"
     chmod +x "${apkovl_dir}/etc/init.d/auto-start-services"
 
     # Enable in default runlevel
@@ -472,70 +366,26 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         *)  NETMASK="255.255.255.0" ;; # Default to /24
     esac
     
-    cat > "${NODE_NAME}-apkovl/etc/network/interfaces" << EOF
-auto lo
-iface lo inet loopback
+    export NODE_IP NETMASK GATEWAY DOMAIN
+    export DNS_SERVER="${DNS_SERVERS[0]}"
+    render_template "config/network-interfaces.tmpl" "${NODE_NAME}-apkovl/etc/network/interfaces"
 
-auto eth0
-iface eth0 inet static
-    address $NODE_IP
-    netmask $NETMASK
-    gateway $GATEWAY
-    dns-nameservers ${DNS_SERVERS[0]}
-    dns-domain $DOMAIN
-EOF
-    
     # Resolve configuration
-    cat > "${NODE_NAME}-apkovl/etc/resolv.conf" << EOF
-nameserver ${DNS_SERVERS[0]}
-domain $DOMAIN
-search $DOMAIN
-EOF
+    render_template "config/resolv.conf.tmpl" "${NODE_NAME}-apkovl/etc/resolv.conf"
 
     # APK repositories configuration
     ALPINE_VERSION=$(yaml_get "alpine.version" "$CONFIG_FILE")
     ALPINE_MAJOR=$(echo "$ALPINE_VERSION" | cut -d'.' -f1,2)
-    cat > "${NODE_NAME}-apkovl/etc/apk/repositories" << EOF
-http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/main
-http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/community
-EOF
+    export ALPINE_MAJOR
+    render_template "config/apk-repositories.tmpl" "${NODE_NAME}-apkovl/etc/apk/repositories"
 
     # SSH daemon configuration
     SSH_PORT=$(yaml_get "ssh.port")
     PERMIT_ROOT=$(yaml_get "ssh.permit_root_login")
     PASS_AUTH=$(yaml_get "ssh.password_authentication")
-    
-    cat > "${NODE_NAME}-apkovl/etc/ssh/sshd_config" << EOF
-Port $SSH_PORT
-Protocol 2
-HostKey /etc/ssh/ssh_host_rsa_key
-HostKey /etc/ssh/ssh_host_ecdsa_key
-HostKey /etc/ssh/ssh_host_ed25519_key
-UsePrivilegeSeparation yes
-KeyRegenerationInterval 3600
-ServerKeyBits 1024
-SyslogFacility AUTH
-LogLevel INFO
-LoginGraceTime 120
-PermitRootLogin $([ "$PERMIT_ROOT" = "true" ] && echo "yes" || echo "no")
-StrictModes yes
-RSAAuthentication yes
-PubkeyAuthentication yes
-IgnoreRhosts yes
-RhostsRSAAuthentication no
-HostbasedAuthentication no
-PermitEmptyPasswords no
-ChallengeResponseAuthentication no
-PasswordAuthentication $([ "$PASS_AUTH" = "true" ] && echo "yes" || echo "no")
-X11Forwarding no
-X11DisplayOffset 10
-PrintMotd no
-PrintLastLog yes
-TCPKeepAlive yes
-AcceptEnv LANG LC_*
-Subsystem sftp /usr/lib/openssh/sftp-server
-UsePAM yes
-EOF
+
+    export SSH_PORT PERMIT_ROOT PASS_AUTH
+    render_template "config/sshd_config.tmpl" "${NODE_NAME}-apkovl/etc/ssh/sshd_config"
 
     # Add SSH authorized keys if provided (overwrite any existing file)
     rm -f "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
@@ -561,120 +411,19 @@ EOF
 
     # Configure chrony for NTP time synchronization
     mkdir -p "${NODE_NAME}-apkovl/etc/chrony"
-    cat > "${NODE_NAME}-apkovl/etc/chrony/chrony.conf" << EOF
-# Use public NTP servers from pool.ntp.org
-pool 2.pool.ntp.org iburst
-
-# Record the rate at which the system clock gains/losses time
-driftfile /var/lib/chrony/chrony.drift
-
-# Allow the system clock to be stepped in the first three updates
-# This is important for diskless systems that may have significant time drift on boot
-makestep 1.0 3
-
-# Enable kernel synchronization of the real-time clock (RTC)
-rtcsync
-
-# Allow NTP client access from local network
-# This allows worker nodes to optionally sync from master node
-allow 192.168.0.0/16
-allow 10.0.0.0/8
-
-# Serve time even if not synchronized to a time source
-local stratum 10
-
-# Log measurements and statistics
-logdir /var/log/chrony
-EOF
+    render_template "config/chrony.conf.sh" "${NODE_NAME}-apkovl/etc/chrony/chrony.conf"
 
     # Create persistent chrony directory structure
     mkdir -p "${NODE_NAME}-apkovl/var/lib/chrony"
 
     # Create k3s init script based on node role
-    # Matches the official k3s OpenRC init script installed by the package
-    if [ "$NODE_ROLE" = "master" ]; then
-        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << 'K3S_INIT_EOF'
-#!/sbin/openrc-run
+    export NODE_ROLE
+    render_template "openrc/k3s.tmpl" "${NODE_NAME}-apkovl/etc/init.d/k3s"
+    chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
+    ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
 
-description="k3s Kubernetes server (master)"
-name=k3s
-command="/usr/local/bin/k3s"
-command_args="server \
-    >>/var/log/k3s.log 2>&1"
-
-supervisor=supervise-daemon
-output_log=/var/log/k3s.log
-error_log=/var/log/k3s.log
-pidfile="/var/run/k3s.pid"
-respawn_delay=5
-respawn_max=0
-
-depend() {
-    after network-online
-    want cgroups
-}
-
-start_pre() {
-    rm -f /tmp/k3s.*
-}
-
-set -o allexport
-if [ -f /etc/environment ]; then . /etc/environment; fi
-if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
-set +o allexport
-K3S_INIT_EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
-        # Enable k3s in default runlevel for master nodes
-        ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
-    else
-        cat > "${NODE_NAME}-apkovl/etc/init.d/k3s" << 'K3S_INIT_EOF'
-#!/sbin/openrc-run
-
-description="k3s Kubernetes agent (worker)"
-name=k3s
-command="/usr/local/bin/k3s"
-command_args="agent \
-    >>/var/log/k3s.log 2>&1"
-
-supervisor=supervise-daemon
-output_log=/var/log/k3s.log
-error_log=/var/log/k3s.log
-pidfile="/var/run/k3s.pid"
-respawn_delay=5
-respawn_max=0
-
-depend() {
-    after network-online
-    want cgroups
-}
-
-start_pre() {
-    rm -f /tmp/k3s.*
-}
-
-set -o allexport
-if [ -f /etc/environment ]; then . /etc/environment; fi
-if [ -f /etc/rancher/k3s/k3s.env ]; then . /etc/rancher/k3s/k3s.env; fi
-set +o allexport
-K3S_INIT_EOF
-        chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
-        # Enable k3s in default runlevel for worker nodes
-        ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
-    fi
-
-    # Create minimal fstab with basic entries to satisfy fstabinfo
-    # storage-init handles actual data partition mounting dynamically
-    cat > "${NODE_NAME}-apkovl/etc/fstab" << EOF
-# Alpine diskless k3s cluster
-# Data partition mounting is handled dynamically by storage-init service
-
-# Standard pseudo-filesystems (required for clean boot)
-proc            /proc           proc    defaults        0 0
-sysfs           /sys            sysfs   defaults        0 0
-devpts          /dev/pts        devpts  defaults        0 0
-tmpfs           /tmp            tmpfs   nosuid,nodev    0 0
-tmpfs           /run            tmpfs   nosuid,nodev    0 0
-EOF
+    # Create minimal fstab — storage-init handles actual data partition mounting
+    render_template "config/fstab.sh" "${NODE_NAME}-apkovl/etc/fstab"
     
     # Add services to default runlevel
     mkdir -p "${NODE_NAME}-apkovl/etc/runlevels/default"
@@ -693,7 +442,8 @@ EOF
     # Note: QEMU test device setup moved to test-alpine-diskless-boot.sh
 
     # Create storage-init OpenRC service
-    cat > "${NODE_NAME}-apkovl/etc/init.d/storage-init" << 'EOF'
+    render_template "openrc/storage-init.sh" "${NODE_NAME}-apkovl/etc/init.d/storage-init"
+    : << 'DISABLED_STORAGE_INIT'
 #!/sbin/openrc-run
 
 description="Storage initialization and persistent storage service"
@@ -1027,11 +777,12 @@ stop() {
     umount /mnt/data 2>/dev/null || true
     eend 0
 }
-EOF
+DISABLED_STORAGE_INIT
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/storage-init"
 
     # Create ssh-persist OpenRC service (idempotent SSH setup on every boot)
-    cat > "${NODE_NAME}-apkovl/etc/init.d/ssh-persist" << 'EOF'
+    render_template "openrc/ssh-persist.sh" "${NODE_NAME}-apkovl/etc/init.d/ssh-persist"
+    : << 'DISABLED_SSH_PERSIST'
 #!/sbin/openrc-run
 
 description="Persistent SSH setup service"
@@ -1144,91 +895,12 @@ stop() {
     # Nothing to do - sshd has its own stop
     eend 0
 }
-EOF
+DISABLED_SSH_PERSIST
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/ssh-persist"
 
     # Create k3s-worker-token OpenRC service for worker nodes
     # This service retrieves the k3s join token from the master server
-    cat > "${NODE_NAME}-apkovl/etc/init.d/k3s-worker-token" << 'K3S_WORKER_TOKEN_EOF'
-#!/sbin/openrc-run
-
-description="k3s worker token retrieval service"
-name="k3s worker token"
-
-depend() {
-    need localmount storage-init ssh-persist net
-    after localmount storage-init ssh-persist net
-    before k3s
-    provide k3s-worker-token
-}
-
-start() {
-    # Check if this is a worker node (has server: in config)
-    if ! grep -q "^server:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
-        einfo "Master node detected - no token retrieval needed"
-        mark_service_started
-        return 0
-    fi
-
-    ebegin "Retrieving k3s worker token from master"
-
-    # Extract master URL from config
-    SERVER_URL=$(grep "^server:" /etc/rancher/k3s/config.yaml | cut -d' ' -f2)
-
-    # Extract hostname from URL - remove protocol prefix then port and path
-    MASTER_HOST=$(echo "${SERVER_URL}" | sed 's|https://||' | sed 's|http://||' | cut -d: -f1 | cut -d/ -f1)
-
-    einfo "Connecting to master: ${MASTER_HOST}"
-
-    # Retrieve token from master via SSH with retry
-    TOKEN_FILE="/etc/rancher/k3s/server-token"
-    MAX_RETRIES=10
-    RETRY_DELAY=10
-    RETRY_COUNT=0
-
-    while [ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]; do
-        einfo "Attempting to retrieve token (attempt $((RETRY_COUNT + 1))/${MAX_RETRIES})..."
-
-        # SSH to master and get token using cluster SSH key
-        if TOKEN=$(ssh -i /root/.ssh/cluster_id_rsa \
-                    -o StrictHostKeyChecking=no \
-                    -o UserKnownHostsFile=/dev/null \
-                    -o ConnectTimeout=5 \
-                    root@${MASTER_HOST} \
-                "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null); then
-            if [ -n "${TOKEN}" ]; then
-                mkdir -p /etc/rancher/k3s
-                echo "${TOKEN}" > "${TOKEN_FILE}"
-                chmod 600 "${TOKEN_FILE}"
-                # Add token to the existing rancher k3s config
-                # Config is already at /etc/rancher/k3s/config.yaml from setup-k3s-yaml.sh
-                mkdir -p /etc/rancher/k3s
-                # Add token if not already present
-                if ! grep -q "^token:" /etc/rancher/k3s/config.yaml 2>/dev/null; then
-                    echo "token: ${TOKEN}" >> /etc/rancher/k3s/config.yaml
-                fi
-                eend 0 "Token retrieved successfully"
-                return 0
-            fi
-        fi
-
-        RETRY_COUNT=$((RETRY_COUNT + 1))
-        if [ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]; then
-            einfo "Master not ready, waiting ${RETRY_DELAY}s before retry..."
-            sleep ${RETRY_DELAY}
-        fi
-    done
-
-    eend 1 "Failed to retrieve k3s token after ${MAX_RETRIES} attempts"
-    return 1
-}
-
-stop() {
-    # Nothing to do on stop
-    ebegin "Stopping k3s-worker-token service"
-    eend 0
-}
-K3S_WORKER_TOKEN_EOF
+    render_template "openrc/k3s-worker-token.sh" "${NODE_NAME}-apkovl/etc/init.d/k3s-worker-token"
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s-worker-token"
 
     # NOTE: lbu-restore service removed - Alpine's init automatically loads
@@ -1238,110 +910,14 @@ K3S_WORKER_TOKEN_EOF
     # No need for a separate restore service - Alpine handles it natively!
 
     # Create lbu-persist OpenRC service (commits changes on shutdown)
-    cat > "${NODE_NAME}-apkovl/etc/init.d/lbu-persist" << 'EOF'
-#!/sbin/openrc-run
-
-description="Commit LBU changes on shutdown/reboot"
-name="lbu persist"
-
-depend() {
-    need storage-init
-    after storage-init system-bootstrap
-    provide lbu-persist
-}
-
-start() {
-    # Nothing to do on start - system-bootstrap handles initial LBU setup
-    ebegin "LBU persistence service started"
-    eend 0
-}
-
-stop() {
-    ebegin "Committing LBU changes before shutdown"
-
-    # Save any runtime changes made during this session
-    if [ -d /mnt/data ] && mountpoint -q /mnt/data; then
-        # Use the custom lbu-commit-runtime created by system-bootstrap
-        if [ -x /usr/local/bin/lbu-commit-runtime ]; then
-            /usr/local/bin/lbu-commit-runtime
-            if [ $? -eq 0 ]; then
-                einfo "Runtime changes committed"
-            else
-                ewarn "LBU commit failed"
-            fi
-        else
-            # Fallback to standard lbu commit
-            if lbu commit -d 2>/dev/null; then
-                einfo "Changes saved to persistent storage"
-            else
-                ewarn "LBU commit failed"
-            fi
-        fi
-    else
-        ewarn "Persistent storage not available, changes will be lost"
-    fi
-
-    eend 0
-}
-EOF
+    render_template "openrc/lbu-persist.sh" "${NODE_NAME}-apkovl/etc/init.d/lbu-persist"
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/lbu-persist"
 
     # Enable lbu-persist service (lbu-restore not needed - Alpine auto-loads apkovl)
     ln -sf /etc/init.d/lbu-persist "${NODE_NAME}-apkovl/etc/runlevels/default/lbu-persist"
 
     # Create late-services OpenRC service (starts services after everything is up)
-    cat > "${NODE_NAME}-apkovl/etc/init.d/late-services" << 'EOF'
-#!/sbin/openrc-run
-
-description="Late services - start after system is fully up"
-name="late services"
-
-depend() {
-    need k3s
-    after k3s
-    provide late-services
-}
-
-start() {
-    ebegin "Starting late services"
-
-    # Install nfs-utils (provides NFS init scripts and binaries)
-    einfo "Installing nfs-utils..."
-    apk add -q nfs-utils
-
-    # Create required directories for NFS
-    einfo "Creating NFS directories..."
-    mkdir -p /var/lib/nfs/sm
-
-    # Enable NFS services in default runlevel
-    einfo "Enabling NFS services..."
-    rc-update add rpc.statd default >/dev/null 2>&1
-    rc-update add nfs default >/dev/null 2>&1
-
-    # Start rpc.statd first (required by NFS)
-    einfo "Starting rpc.statd..."
-    if ! rc-service rpc.statd status >/dev/null 2>&1; then
-        rc-service rpc.statd start
-    fi
-
-    # Wait for rpc.statd to be ready
-    sleep 2
-
-    # Start NFS server
-    einfo "Starting NFS server..."
-    if ! rc-service nfs status >/dev/null 2>&1; then
-        rc-service nfs start
-    fi
-
-    eend 0
-}
-
-stop() {
-    # Nothing to do on stop
-    ebegin "Stopping late services"
-    eend 0
-}
-EOF
+    render_template "openrc/late-services.sh" "${NODE_NAME}-apkovl/etc/init.d/late-services"
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/late-services"
 
     # Enable late-services in default runlevel (runs after k3s)
