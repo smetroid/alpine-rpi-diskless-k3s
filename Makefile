@@ -23,11 +23,22 @@ NODE ?= k3s-21
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
 
+# gomplate template engine (auto-downloaded, no manual install needed)
+GOMPLATE_VERSION := v3.11.7
+GOMPLATE_OS      := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+GOMPLATE_ARCH    := $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+GOMPLATE_BIN     := .local/bin/gomplate
+GOMPLATE_URL     := https://github.com/hairyhenderson/gomplate/releases/download/$(GOMPLATE_VERSION)/gomplate_$(GOMPLATE_OS)-$(GOMPLATE_ARCH)
+TEMPLATES_DIR    := templates
+export GOMPLATE_BIN
+export TEMPLATES_DIR
+
 .PHONY: help build validate clean clean-cache clean-test clean-all setup-sd test test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
         qemu-cluster test-qemu \
         build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats \
-        lint format shellcheck-shfmt
+        lint format shellcheck-shfmt \
+        install-deps backup verify
 
 # Default target
 help:
@@ -76,13 +87,18 @@ help:
 	@echo "  make lint                Run shellcheck and check formatting"
 	@echo "  make shellcheck-shfmt     Run shellcheck on all shell scripts"
 	@echo "  make format              Format shell scripts with shfmt"
+	@echo ""
+	@echo "Template / Verification Targets:"
+	@echo "  make install-deps        Download gomplate binary to .local/bin/"
+	@echo "  make backup              Snapshot current builds/ as reference baseline"
+	@echo "  make verify              Diff new builds against reference (excludes machine-id, SSH keys)"
 
 # =============================================================================
 # Build Targets
 # =============================================================================
 
 # Build all apkovl archives from YAML configuration
-build: validate
+build: validate | $(GOMPLATE_BIN)
 	@echo "Building apkovl archives from $(CONFIG)..."
 	./$(SCRIPTS_DIR)/build-from-yaml.sh $(CONFIG)
 
@@ -311,4 +327,83 @@ lint: shellcheck-shfmt
 		shfmt -d scripts/*.sh lib/*.sh; \
 	else \
 		echo "shfmt not installed for formatting check"; \
+	fi
+
+# =============================================================================
+# Gomplate (template engine auto-download)
+# =============================================================================
+
+$(GOMPLATE_BIN):
+	@mkdir -p .local/bin
+	@echo "Downloading gomplate $(GOMPLATE_VERSION) for $(GOMPLATE_OS)/$(GOMPLATE_ARCH)..."
+	@curl -fsSL "$(GOMPLATE_URL)" -o $@
+	@chmod +x $@
+	@echo "gomplate ready: $@"
+
+install-deps: $(GOMPLATE_BIN)
+	@echo "All dependencies installed."
+
+# =============================================================================
+# Backup and Verify Targets
+# =============================================================================
+
+# Snapshot current build outputs as a reference baseline before converting to templates.
+# Run this once before starting template conversion, then use 'make verify' to check results.
+backup:
+	@echo "Creating reference backup of build outputs..."
+	@if [ -d builds ] && [ "$$(ls -A builds/ 2>/dev/null)" ]; then \
+		rm -rf builds-reference; \
+		cp -a builds builds-reference; \
+		echo "  ✓ builds/ → builds-reference/"; \
+	else \
+		echo "  No builds/ content to backup. Run 'make build' first."; \
+	fi
+	@if [ -d builds-qemu ] && [ "$$(ls -A builds-qemu/ 2>/dev/null)" ]; then \
+		rm -rf builds-qemu-reference; \
+		cp -a builds-qemu builds-qemu-reference; \
+		echo "  ✓ builds-qemu/ → builds-qemu-reference/"; \
+	fi
+	@echo "Backup complete. Run 'make verify' after rebuilding to compare."
+
+# Compare new build output against the reference backup.
+# Excludes non-deterministic files: machine-id, cluster SSH keys, authorized_keys.
+verify:
+	@echo "Comparing new builds against reference..."
+	@if [ ! -d builds-reference ]; then \
+		echo "No reference backup found. Run 'make backup' first."; \
+		exit 1; \
+	fi
+	@FAILED=0; \
+	for ref_dir in builds-reference/*-apkovl; do \
+		node_dir=$$(basename $$ref_dir); \
+		new_dir="builds/$$node_dir"; \
+		if [ ! -d "$$new_dir" ]; then \
+			echo "  MISSING: $$new_dir"; \
+			FAILED=1; \
+			continue; \
+		fi; \
+		echo "  Checking $$node_dir/etc/ ..."; \
+		if diff -rq \
+			--exclude="machine-id" \
+			--exclude="cluster_id_rsa*" \
+			--exclude="authorized_keys" \
+			"$$ref_dir/etc" "$$new_dir/etc" >/dev/null 2>&1; then \
+			echo "    ✓ etc/ matches reference"; \
+		else \
+			echo "    ✗ etc/ DIFFERS from reference:"; \
+			diff -r \
+				--exclude="machine-id" \
+				--exclude="cluster_id_rsa*" \
+				--exclude="authorized_keys" \
+				"$$ref_dir/etc" "$$new_dir/etc" 2>/dev/null || true; \
+			FAILED=1; \
+		fi; \
+	done; \
+	if [ "$$FAILED" -eq 0 ]; then \
+		echo ""; \
+		echo "✅ All comparable files match the reference!"; \
+	else \
+		echo ""; \
+		echo "❌ Some files differ - review diffs above."; \
+		exit 1; \
 	fi

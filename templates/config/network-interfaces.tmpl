@@ -1,0 +1,10 @@
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+    address {{ .Env.NODE_IP }}
+    netmask {{ .Env.NETMASK }}
+    gateway {{ .Env.GATEWAY }}
+    dns-nameservers {{ .Env.DNS_SERVER }}
+    dns-domain {{ .Env.DOMAIN }}
