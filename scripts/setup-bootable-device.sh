@@ -353,7 +353,7 @@ if [ ! -f "$ORIGINAL_DIR/$ALPINE_IMAGE" ]; then
     exit 1
 fi
 
-cd $MOUNT_BOOT
+cd "$MOUNT_BOOT" || exit 1
 
 # Extract with verbose output and error checking
 if ! sudo tar -xzf "$ORIGINAL_DIR/$ALPINE_IMAGE"; then
@@ -462,7 +462,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     sleep 5
     
     # Change to a different directory to avoid keeping temp directory busy
-    cd /tmp
+    cd /tmp || exit 1
     
     # Now try to remove the temp directory with better cleanup
     if ! rmdir "$MOUNT_BOOT" 2>/dev/null; then

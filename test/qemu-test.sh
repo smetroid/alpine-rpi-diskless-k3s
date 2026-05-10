@@ -154,7 +154,8 @@ setup_environment() {
 
     # Check cache first
     if [ -n "$ALPINE_CACHE_KEY" ] && type cache_get >/dev/null 2>&1; then
-        local cache_key=$(cache_key_alpine_iso "virt" "$alpine_version" "$alpine_arch" "iso" 2>/dev/null || echo "")
+        local cache_key
+        cache_key=$(cache_key_alpine_iso "virt" "$alpine_version" "$alpine_arch" "iso" 2>/dev/null || echo "")
         if [ -n "$cache_key" ] && cache_get "alpine-iso" "$cache_key" "$alpine_iso"; then
             echo "Using cached Alpine ISO: $alpine_iso"
         fi
