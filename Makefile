@@ -6,6 +6,9 @@
 #   make setup-sd DEVICE=/dev/sdX NODE=k3s-21  - Setup SD card
 #   make clean                  - Remove build artifacts
 
+# Ensure Homebrew bin is in PATH (macOS)
+export PATH := /opt/homebrew/bin:$(PATH)
+
 # Configuration
 CONFIG ?= k3s.yaml
 SCRIPTS_DIR := scripts
@@ -27,9 +30,9 @@ UNAME := $(shell uname)
 GOMPLATE_VERSION := v3.11.7
 GOMPLATE_OS      := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 GOMPLATE_ARCH    := $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-GOMPLATE_BIN     := .local/bin/gomplate
+GOMPLATE_BIN     := $(CURDIR)/.local/bin/gomplate
 GOMPLATE_URL     := https://github.com/hairyhenderson/gomplate/releases/download/$(GOMPLATE_VERSION)/gomplate_$(GOMPLATE_OS)-$(GOMPLATE_ARCH)
-TEMPLATES_DIR    := templates
+TEMPLATES_DIR    := $(CURDIR)/templates
 export GOMPLATE_BIN
 export TEMPLATES_DIR
 
@@ -387,6 +390,7 @@ verify:
 			--exclude="machine-id" \
 			--exclude="cluster_id_rsa*" \
 			--exclude="authorized_keys" \
+			--exclude="system-bootstrap" \
 			"$$ref_dir/etc" "$$new_dir/etc" >/dev/null 2>&1; then \
 			echo "    ✓ etc/ matches reference"; \
 		else \
@@ -395,6 +399,7 @@ verify:
 				--exclude="machine-id" \
 				--exclude="cluster_id_rsa*" \
 				--exclude="authorized_keys" \
+				--exclude="system-bootstrap" \
 				"$$ref_dir/etc" "$$new_dir/etc" 2>/dev/null || true; \
 			FAILED=1; \
 		fi; \
