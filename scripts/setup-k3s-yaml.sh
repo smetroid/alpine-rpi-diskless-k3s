@@ -41,7 +41,10 @@ fi
 CLUSTER_CIDR=$(get_k3s_cluster_cidr)
 SERVICE_CIDR=$(get_k3s_service_cidr)
 FLANNEL_BACKEND=$(yaml_get "k3s.flannel_backend")
-mapfile -t DISABLE_SERVICES < <(yaml_get_array ".k3s.disable_services[]")
+DISABLE_SERVICES=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && DISABLE_SERVICES+=("$_line")
+done < <(yaml_get_array ".k3s.disable_services[]")
 
 # Get external datastore configuration (optional)
 DATASTORE_ENDPOINT=""

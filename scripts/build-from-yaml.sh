@@ -90,7 +90,10 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Finalizing apkovl for $NODE_NAME..."
     
     # Get Alpine packages from config
-    ALPINE_PACKAGES=($(get_alpine_packages))
+    ALPINE_PACKAGES=()
+    while IFS= read -r _line; do
+        [[ -n "$_line" ]] && ALPINE_PACKAGES+=("$_line")
+    done < <(get_alpine_packages)
     
     # Build APK install block for template
     APK_INSTALL_BLOCK=""

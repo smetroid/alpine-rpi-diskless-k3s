@@ -45,12 +45,15 @@ discover_package_version() {
 process_overlay_packages() {
     local apkovl_dir="$1"
     local config_file="$2"
-    local arch=$(yaml_get "alpine.architecture" "$config_file")
-    local alpine_version=$(yaml_get "alpine.version" "$config_file")
-    local alpine_major=$(echo "$alpine_version" | cut -d'.' -f1-2)
+    local arch
+    arch=$(yaml_get "alpine.architecture" "$config_file")
+    local alpine_version
+    alpine_version=$(yaml_get "alpine.version" "$config_file")
+    local alpine_major="${alpine_version%.*}"
     local base_url="http://dl-cdn.alpinelinux.org/alpine/v${alpine_major}/main/${arch}"
 
-    local packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
+    local packages
+    packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
 
     if [ -z "$packages" ]; then
         echo "No overlay packages specified"
@@ -78,7 +81,8 @@ process_overlay_packages() {
         echo "Processing overlay package: $pkg_name"
 
         # Discover version using discover_package_version function
-        local version=$(discover_package_version "$pkg_name" "$tmp_dir")
+        local version
+        version=$(discover_package_version "$pkg_name" "$tmp_dir")
         if [ -z "$version" ]; then
             echo "Error: Package $pkg_name not found in APKINDEX"
             rm -rf "$tmp_dir"
@@ -88,7 +92,8 @@ process_overlay_packages() {
         echo "Found $pkg_name version: $version"
 
         # Generate cache key for this package
-        local cache_key=$(cache_key_apk "$arch" "$pkg_name" "$version")
+        local cache_key
+        cache_key=$(cache_key_apk "$arch" "$pkg_name" "$version")
         local apk_file="${tmp_dir}/${pkg_name}.apk"
 
         # Try to get from cache first
@@ -124,7 +129,8 @@ generate_auto_start_services() {
     local apkovl_dir="$1"
     local config_file="$2"
 
-    local packages=$(yaml_get_array ".auto_start_services[]" "$config_file")
+    local packages
+    packages=$(yaml_get_array ".auto_start_services[]" "$config_file")
 
     if [ -z "$packages" ]; then
         echo "No auto-start services configured"
@@ -141,7 +147,7 @@ generate_auto_start_services() {
     done <<< "$packages"
 
     # Trim leading space
-    pkg_list=$(echo "$pkg_list" | sed 's/^ //')
+    pkg_list="${pkg_list# }"
 
     if [ -z "$pkg_list" ]; then
         echo "  No packages to configure"
@@ -165,8 +171,10 @@ generate_auto_start_services() {
 download_k3s_binary() {
     local apkovl_dir="$1"
     local config_file="$2"
-    local arch=$(yaml_get "alpine.architecture" "$config_file")
-    local version=$(yaml_get "cluster.k3s_version" "$config_file")
+    local arch
+    arch=$(yaml_get "alpine.architecture" "$config_file")
+    local version
+    version=$(yaml_get "cluster.k3s_version" "$config_file")
 
     # Map Alpine architecture names to k3s/GitHub release architecture names
     case "$arch" in
@@ -188,7 +196,8 @@ download_k3s_binary() {
     local dest="${apkovl_dir}/usr/local/bin/k3s"
 
     # Generate cache key
-    local cache_key=$(cache_key_k3s "$version" "$k3s_arch")
+    local cache_key
+    cache_key=$(cache_key_k3s "$version" "$k3s_arch")
     local tmp_file="/tmp/k3s-download-$$_${cache_key}"
 
     # Try to get from cache first
@@ -226,7 +235,8 @@ download_k3s_binary() {
         fi
 
         # Verify file size (k3s is ~50MB+, warn if too small)
-        local size=$(stat -f%z "$tmp_file" 2>/dev/null || stat -c%s "$tmp_file" 2>/dev/null || echo "0")
+        local size
+        size=$(stat -f%z "$tmp_file" 2>/dev/null || stat -c%s "$tmp_file" 2>/dev/null || echo "0")
         if [ "$size" -lt 10000000 ]; then
             echo "⚠️  Warning: Downloaded binary seems too small (${size} bytes)"
             echo "   Expected k3s binary to be ~50MB+"
@@ -288,7 +298,10 @@ fi
 # Get configuration values
 CLUSTER_NAME=$(get_cluster_name)
 GATEWAY=$(get_network_gateway)
-DNS_SERVERS=($(get_dns_servers))
+DNS_SERVERS=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && DNS_SERVERS+=("$_line")
+done < <(get_dns_servers)
 DOMAIN=$(yaml_get "network.domain")
 
 echo "Cluster: $CLUSTER_NAME"
