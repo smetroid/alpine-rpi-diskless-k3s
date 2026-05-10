@@ -8,19 +8,8 @@ disable=SC1090
 disable=SC1091
 
 # Disable SC2086 (double quote to prevent globbing)
-# This is a common pattern in shell scripts
 disable=SC2086
 
-# Source paths that should be ignored (generated/mock files)
-source-path=(
-    lib/
-    scripts/
-)
-
-# Exclude specific files from checking
-exclude=(
-    builds/
-    builds-qemu/
-    .cache/
-    test/qemu-cluster/
-)
+# Tell shellcheck where to find sourced files
+source-path=SCRIPTDIR
+source-path=lib
