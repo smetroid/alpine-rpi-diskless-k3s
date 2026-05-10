@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034
 
 description="Late services - start after system is fully up"
 name="late services"

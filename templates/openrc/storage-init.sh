@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034,SC3043
 
 description="Storage initialization and persistent storage service"
 name="storage init"

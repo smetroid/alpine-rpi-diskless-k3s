@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034
 
 description="k3s worker token retrieval service"
 name="k3s worker token"
