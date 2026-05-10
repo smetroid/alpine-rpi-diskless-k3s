@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034
 
 description="Persistent SSH setup service"
 name="ssh persist"
