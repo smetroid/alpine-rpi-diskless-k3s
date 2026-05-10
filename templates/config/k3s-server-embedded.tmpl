@@ -1,0 +1,8 @@
+write-kubeconfig-mode: "0644"
+cluster-init: true
+bind-address: {{ .Env.NODE_IP }}
+advertise-address: {{ .Env.NODE_IP }}
+node-ip: {{ .Env.NODE_IP }}
+cluster-cidr: "{{ .Env.CLUSTER_CIDR }}"
+service-cidr: "{{ .Env.SERVICE_CIDR }}"
+flannel-backend: "{{ .Env.FLANNEL_BACKEND }}"

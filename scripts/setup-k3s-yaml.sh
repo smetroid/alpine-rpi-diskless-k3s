@@ -15,6 +15,10 @@ export CONFIG_FILE
 # Load YAML parser
 source "$LIB_DIR/yaml-parser.sh"
 
+# Load template renderer
+_templates_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$LIB_DIR/templates.sh"
+
 echo "Setting up K3s configuration from YAML..."
 
 # Validate configuration
@@ -60,29 +64,13 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         # All servers coordinate via the external datastore instead
         if [ -n "$DATASTORE_ENDPOINT" ]; then
             # HA with external datastore
-            cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
-write-kubeconfig-mode: "0644"
-bind-address: $NODE_IP
-advertise-address: $NODE_IP
-node-ip: $NODE_IP
-cluster-cidr: "$CLUSTER_CIDR"
-service-cidr: "$SERVICE_CIDR"
-flannel-backend: "$FLANNEL_BACKEND"
-datastore-endpoint: "$DATASTORE_ENDPOINT"
-EOF
+            export NODE_IP CLUSTER_CIDR SERVICE_CIDR FLANNEL_BACKEND DATASTORE_ENDPOINT
+            render_template "config/k3s-server-datastore.tmpl" "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             echo "# HA mode: External datastore enabled"
         else
             # Embedded database (SQLite) with cluster-init
-            cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
-write-kubeconfig-mode: "0644"
-cluster-init: true
-bind-address: $NODE_IP
-advertise-address: $NODE_IP
-node-ip: $NODE_IP
-cluster-cidr: "$CLUSTER_CIDR"
-service-cidr: "$SERVICE_CIDR"
-flannel-backend: "$FLANNEL_BACKEND"
-EOF
+            export NODE_IP CLUSTER_CIDR SERVICE_CIDR FLANNEL_BACKEND
+            render_template "config/k3s-server-embedded.tmpl" "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             echo "# HA mode: Embedded database with cluster-init"
         fi
 
@@ -126,10 +114,8 @@ EOF
         fi
 
         # Agent node configuration
-        cat > "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml" << EOF
-server: $SERVER_URL
-node-ip: $NODE_IP
-EOF
+        export SERVER_URL NODE_IP
+        render_template "config/k3s-agent.tmpl" "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
 
         # Note: Worker will retrieve token from master via SSH during bootstrap
         # The system-bootstrap script handles this automatically for worker nodes
