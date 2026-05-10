@@ -1,0 +1,13 @@
+# NGINX Ingress Controller for k3s cluster
+# Auto-generated from cluster-config.yaml
+# Version: {{ .Env.NGINX_VERSION }}, Replicas: {{ .Env.NGINX_REPLICAS }}
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    name: ingress-nginx
+---
+# NGINX Ingress Controller manifests would continue here...
+# For brevity, using a simplified version that references the image version

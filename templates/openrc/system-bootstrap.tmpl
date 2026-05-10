@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+
+description="Alpine diskless system initialization service"
+name="system bootstrap"
+
+depend() {
+    need localmount storage-init ssh-persist net
+    after localmount storage-init ssh-persist net
+    provide system-bootstrap
+}
+
+start() {
+    # Check if already completed
+    if [ -f /mnt/data/.system-initialized ]; then
+        einfo "System already initialized - skipping"
+        mark_service_started
+        return 0
+    fi
+
+    # Run the bootstrap script
+    ebegin "Running system bootstrap"
+    if /usr/local/bin/system_bootstrap; then
+        eend 0 "System bootstrap completed"
+        return 0
+    else
+        eend 1 "System bootstrap failed"
+        return 1
+    fi
+}
