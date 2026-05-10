@@ -17,7 +17,8 @@ jobs:
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
-          check: scripts lib
+          scandir: '.'
+          additional_files: 'scripts lib templates/openrc templates/scripts'
 
   validate:
     name: Validate YAML Configuration
@@ -26,22 +27,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Install Python and PyYAML
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
+      - name: Install PyYAML
+        run: pip install pyyaml
+
       - name: Validate k3s.yaml
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('k3s.yaml'))"
+        run: python3 -c "import yaml; yaml.safe_load(open('k3s.yaml'))"
 
       - name: Validate qemu.yaml
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('qemu.yaml'))"
+        run: python3 -c "import yaml; yaml.safe_load(open('qemu.yaml'))"
 
       - name: Validate cluster-config.yaml.example
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
+        run: python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
 
   build:
     name: Build Apkovl Archives
@@ -53,23 +54,25 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y tar gzip
+          sudo apt-get install -y curl tar gzip yq
+
+      - name: Install gomplate
+        run: make install-deps
 
       - name: Build production config
         run: |
-          chmod +x scripts/*.sh
+          chmod +x scripts/*.sh lib/*.sh
           make build CONFIG=k3s.yaml
 
       - name: Build test config
-        run: |
-          make build-test
+        run: make build-test
 
       - name: Verify outputs exist
         run: |
-          ls -la builds/*.apkovl.tar.gz || echo "No production archives"
-          ls -la builds-qemu/*.apkovl.tar.gz || echo "No test archives"
+          ls -la builds/*.apkovl.tar.gz
+          ls -la builds-qemu/*.apkovl.tar.gz
 
-  test:
+  format:
     name: Shell Script Formatting Check
     runs-on: ubuntu-latest
     steps:
@@ -82,9 +85,7 @@ jobs:
           echo "$HOME/go/bin" >> $GITHUB_PATH
 
       - name: Check formatting
-        run: |
-          find scripts lib -name "*.sh" -exec shfmt -d {} \;
-        continue-on-error: true
+        run: find scripts lib -name "*.sh" -exec shfmt -d {} \;
 
   code-quality:
     name: Code Quality
@@ -93,15 +94,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check for broken links in docs
-        run: |
-          # Simple check: verify markdown files don't have obvious broken links
-          # This is a basic check, real link checking would require more tooling
-          find docs -name "*.md" -exec grep -l "http://" {} \; | head -5
-
       - name: Check README exists
-        run: |
-          test -f README.md
+        run: test -f README.md
 
       - name: Check required files exist
         run: |
