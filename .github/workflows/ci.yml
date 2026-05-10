@@ -19,6 +19,7 @@ jobs:
         with:
           scandir: '.'
           additional_files: 'scripts lib templates/openrc templates/scripts'
+          ignore_paths: 'templates/config builds builds-qemu builds-reference builds-qemu-reference'
 
   validate:
     name: Validate YAML Configuration
@@ -54,7 +55,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl tar gzip yq
+          sudo apt-get install -y curl tar gzip
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
       - name: Install gomplate
         run: make install-deps
