@@ -13,12 +13,17 @@ jobs:
         run: |
           BRANCH_NAME=${{ github.head_ref }}
           echo "Branch: $BRANCH_NAME"
-          
-          # Allow main, develop, release/*, or feature/*, fix/*, docs/*
-          if [[ "$BRANCH_NAME" =~ ^(main|develop|release/[0-9]+\.[0-9]+|feature/.+|fix/.+|docs/.+)$ ]]; then
+
+          # Allow main, develop, release/*, feature/*, feat/*, fix/*, docs/*, chore/*
+          if [[ "$BRANCH_NAME" =~ ^(main|develop|release/[0-9]+\.[0-9]+|feature/.+|feat/.+|fix/.+|docs/.+|chore/.+)$ ]]; then
             echo "Branch name is valid"
             exit 0
           fi
-          
-          echo "Branch name should be: main, develop, release/x.y, feature/..., fix/..., docs/..."
+
+          echo "Branch name should follow one of these patterns:"
+          echo "  feature/<description>  or  feat/<description>"
+          echo "  fix/<description>"
+          echo "  docs/<description>"
+          echo "  chore/<description>"
+          echo "  release/<major>.<minor>"
           exit 1
