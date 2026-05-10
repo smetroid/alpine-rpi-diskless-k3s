@@ -1,15 +1,15 @@
 # ShellCheck configuration
 # https://www.shellcheck.net/
 
-# Disable SC1090 (can't follow non-constant source)
+# Can't follow non-constant source (we source from variables)
 disable=SC1090
 
-# Disable SC1091 (not following sourced file)
+# Not following sourced file (external sources not checked here)
 disable=SC1091
 
-# Disable SC2086 (double quote to prevent globbing)
+# Double quote to prevent globbing — intentionally unquoted in many places
 disable=SC2086
 
-# Tell shellcheck where to find sourced files
+# Allow scripts to find sourced files relative to the script location
 source-path=SCRIPTDIR
-source-path=lib
+source-path=SCRIPTDIR/../lib
