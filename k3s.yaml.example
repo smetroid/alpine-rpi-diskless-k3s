@@ -1,47 +1,50 @@
-# Alpine Diskless k3s Cluster Configuration - QEMU Testing Environment
-# This config mirrors k3s.yaml but with QEMU-appropriate values
+# Alpine Diskless k3s Cluster Configuration
+# Copy this file to k3s.yaml and modify values to match your environment.
+# k3s.yaml is gitignored to keep your real values out of the repo.
 
 cluster:
-  name: "alpine-k3s-test"
+  name: "alpine-k3s"
   k3s_version: "v1.35.0+k3s1"
-  token: "REDACTED_TOKEN"
+  token: "" # Leave empty to auto-generate
 
 network:
   domain: "local"
-  subnet: "10.99.0.0/24"
-  gateway: "10.99.0.2"
-  # Note: Using Cloudflare DNS for better reliability
+  subnet: "192.168.1.0/24"
+  gateway: "192.168.1.1"
   dns_servers:
-    - "1.1.1.1"
-    - "1.0.0.1"
+    - "192.168.1.1"
 
-  # MetalLB LoadBalancer IP range
-  loadbalancer_pool:
-    start: "10.99.0.70"
-    end: "10.99.0.80"
+  ## MetalLB LoadBalancer IP range
+  #loadbalancer_pool:
+  #  start: "192.168.1.70"
+  #  end: "192.168.1.80"
 
 nodes:
-  - name: "qemu-test-1"
-    ip: "10.99.0.15"
+  - name: "k3s-master"
+    ip: "192.168.1.21"
     role: "master"
     taints:
       - "CriticalAddonsOnly=true:NoExecute"
 
-  - name: "qemu-test-2"
-    ip: "10.99.0.16"
+  - name: "k3s-worker-1"
+    ip: "192.168.1.22"
+    role: "worker"
+
+  - name: "k3s-worker-2"
+    ip: "192.168.1.23"
     role: "worker"
 
 k3s:
   # Services to disable (k3s defaults: servicelb, traefik)
-  #disable_services:
-  #  - "servicelb"
-  #  - "traefik"
+  disable_services:
+    - "servicelb"
+    #- "traefik"
 
   # External datastore for high availability (optional)
   # When enabled, all masters share the same backend database
   #datastore:
   #  type: "postgres"  # postgres, mysql
-  #  host: "10.0.2.3"
+  #  host: "192.168.1.3"
   #  port: 5432
   #  database: "k3s"
   #  user: "k3s"
@@ -51,27 +54,17 @@ k3s:
 
   # Load balancer VIP for worker nodes (recommended for true HA)
   # Workers connect to this VIP which distributes across all masters
-  #loadbalancer_vip: "10.0.2.100"
+  #loadbalancer_vip: "192.168.1.254"
 
   # Cluster networking
   cluster_cidr: "10.42.0.0/16"
   service_cidr: "10.43.0.0/16"
   flannel_backend: "vxlan"
 
-#services:
-#  metallb:
-#    enabled: true
-#    version: "v0.13.12"
-#
-#  nginx_ingress:
-#    enabled: true
-#    version: "v1.8.4"
-#    replicas: 2
-
 alpine:
   version: "3.22.1"
-  architecture: "x86_64"
-  timezone: "America/Denver"
+  architecture: "aarch64"
+  timezone: "UTC"
 
   # Additional packages to install
   packages:
@@ -87,21 +80,10 @@ alpine:
     - "parted"
     - "e2fsprogs"
     - "chrony"  # NTP time synchronization (required for SSL/TLS)
-    # NFS client support (installed via apk for QEMU testing)
-    - "nfs-utils"
-    - "rpcbind"
-    - "keyutils"
-    - "libtirpc"
-    - "krb5-libs"
 
 storage:
   # Partition sizes (used by setup-bootable-device.sh for SD card preparation)
   boot_partition_size: "512MiB"
-
-  # Persistent paths for bind mounts (handled by storage-init service)
-  persistent_paths:
-    - "/etc/k3s"
-    - "/var/lib/k3s"
 
 ssh:
   port: 22
@@ -110,13 +92,14 @@ ssh:
 
   # SSH public keys (add your keys here)
   authorized_keys:
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEZLY9AEip1+eIHgAL6yArtOYkQmr628i/1dnQ1f2d7q you@example.com"
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDgWNENolh5s+6d+tpHV8IpnGG3JQr5Ozu6tg2QXIyyB kike@localhost.local"
+    - "ssh-ed25519 AAAA...REPLACE_WITH_YOUR_PUBLIC_KEY your-name@example.com"
 
 # Overlay packages - packages to include in apkovl for early boot
 # Architecture-specific packages will be downloaded automatically
 overlay_packages:
   - name: "openssh"
+  - name: "chrony"  # NTP time synchronization (required for SSL/TLS)
+  - name: "chrony-openrc"  # OpenRC init script for chrony
   - name: "e2fsprogs"
   - name: "e2fsprogs-libs"  # Shared libraries for mkfs.ext4
   - name: "libcom_err"  # Error description library
@@ -124,11 +107,13 @@ overlay_packages:
   - name: "libuuid"  # UUID library
   - name: "libeconf"  # Config file library (needed by libblkid)
   - name: "libarchive"  # Archive library (needed by mke2fs)
-  - name: "musl"  # C library and dynamic loader (ld-musl-x86_64.so.1)
+  - name: "musl"  # C library and dynamic loader (ld-musl-aarch64.so.1)
   - name: "util-linux"  # Provides blkid, uuidgen binaries
 
 # Services to auto-start at every boot
 # Each package will be installed via 'apk add' and its service started automatically
-# Service dependencies (like rpcbind for nfs) are handled by OpenRC
+# IMPORTANT: Order matters! Dependencies must come before dependent services
 auto_start_services:
-  - "nfs-utils"   # Installs package, starts 'nfs' service (rpcbind starts automatically)
+  - "rpcbind"     # RPC portmapper - required by nfs
+  - "chrony"      # NTP time synchronization
+  # nfs-utils is started by late-services (after k3s is up)
