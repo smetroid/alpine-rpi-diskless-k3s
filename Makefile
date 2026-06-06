@@ -41,7 +41,7 @@ export TEMPLATES_DIR
         qemu-cluster test-qemu \
         build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats \
         lint format shellcheck-shfmt \
-        install-deps backup verify
+        install-deps install-hooks backup verify
 
 # Default target
 help:
@@ -93,6 +93,7 @@ help:
 	@echo ""
 	@echo "Template / Verification Targets:"
 	@echo "  make install-deps        Download gomplate binary to .local/bin/"
+	@echo "  make install-hooks       Install gitleaks pre-commit hook"
 	@echo "  make backup              Snapshot current builds/ as reference baseline"
 	@echo "  make verify              Diff new builds against reference (excludes machine-id, SSH keys)"
 
@@ -322,7 +323,18 @@ format:
 		echo "shfmt not installed. Install with: go install mvdan.cc/sh/v3/cmd/shfmt@latest"; \
 	fi
 
-# Run all linting (shellcheck + formatting check)
+# Install gitleaks pre-commit hook (configures git to use .githooks/)
+install-hooks:
+	@echo "Installing git hooks from .githooks/..."
+	@git config core.hooksPath .githooks
+	@echo "✓ Hooks configured. Running pre-commit check..."
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		echo "  gitleaks is installed"; \
+	else \
+		echo "  Install gitleaks: brew install gitleaks (macOS) or go install github.com/gitleaks/gitleaks/v8/cmd/gitleaks@latest"; \
+	fi
+	@chmod +x .githooks/*
+
 lint: shellcheck-shfmt
 	@echo ""
 	@echo "Checking script formatting..."

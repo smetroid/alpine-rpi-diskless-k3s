@@ -1,0 +1,28 @@
+#!/bin/sh
+# Pre-commit hook: check for secrets with gitleaks
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "[pre-commit] gitleaks not installed -- skipping secret scan"
+    echo "[pre-commit] Install with: brew install gitleaks (macOS) or go install github.com/gitleaks/gitleaks/v8/cmd/gitleaks@latest"
+    exit 0
+fi
+
+echo "[pre-commit] Scanning staged changes for secrets..."
+
+if [ -f ".gitleaks.toml" ]; then
+    gitleaks protect --staged --config .gitleaks.toml
+else
+    gitleaks protect --staged
+fi
+
+result=$?
+
+if [ $result -eq 1 ]; then
+    echo ""
+    echo "[pre-commit] Potential secrets found in staged changes!"
+    echo "[pre-commit] Review the findings above. To bypass: git commit --no-verify"
+    exit 1
+fi
+
+echo "[pre-commit] No secrets detected in staged changes"
+exit 0
