@@ -10,14 +10,14 @@
 export PATH := /opt/homebrew/bin:$(PATH)
 
 # Configuration
-CONFIG ?= k3s.yaml
+CONFIG ?= k3s.yaml.example
 SCRIPTS_DIR := scripts
 TEST_DIR := test
 
 # Export CONFIG_FILE for scripts (they check env var before arguments)
 # Build directory is auto-detected by scripts based on config basename:
-#   - builds/         for k3s.yaml, cluster-*.yaml
-#   - builds-qemu/    for qemu.yaml, *-test.yaml, *-qemu.yaml
+#   - builds/         for k3s.yaml.example, cluster-*.yaml
+#   - builds-qemu/    for qemu.yaml.example, *-test.yaml, *-qemu.yaml
 export CONFIG_FILE := $(CONFIG)
 
 # Default node (first node in config)
@@ -72,17 +72,17 @@ help:
 	@echo "                          Start worker VM (run after server, in terminal 2)"
 	@echo "  make test-cluster-status  Show running test VMs"
 	@echo "  make test-cluster-stop    Stop all test VMs"
-	@echo "  make test-qemu          Build + boot with qemu.yaml (single node)"
-	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
+	@echo "  make test-qemu          Build + boot with qemu.yaml.example (single node)"
+	@echo "  make test-prod          Boot test with production config (k3s.yaml.example)"
 	@echo ""
 	@echo "Configuration:"
-	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
+	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml.example)"
 	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-21)"
 	@echo "  DEVICE=<path>           Block device for SD card setup"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build CONFIG=my-cluster.yaml"
-	@echo "  make build-test          # Build QEMU test config"
+	@echo "  make build-test          # Build QEMU test config (qemu.yaml.example)"
 	@echo "  make test-qemu           # Full QEMU test workflow"
 	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
 	@echo ""
@@ -124,10 +124,10 @@ build-manifests:
 build-archives:
 	./$(SCRIPTS_DIR)/create-apkovl-archives.sh $(CONFIG)
 
-# Build test configuration (qemu.yaml)
+# Build test configuration (qemu.yaml.example)
 build-test:
-	@echo "Building test apkovl archives from qemu.yaml..."
-	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml
+	@echo "Building test apkovl archives from qemu.yaml.example..."
+	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml.example
 
 # Create partitioned disk template for QEMU testing
 # This creates data-partitioned-template.qcow2 with pre-formatted partitions
@@ -175,12 +175,12 @@ test:
 # Full QEMU test workflow - build and boot test config (single node for quick testing)
 test-qemu: build-test
 	@echo "Running single-node QEMU test..."
-	CONFIG_FILE=qemu.yaml ./$(TEST_DIR)/qemu-test.sh server
+	CONFIG_FILE=qemu.yaml.example ./$(TEST_DIR)/qemu-test.sh server
 
 # Boot test with production config (for RPi hardware testing)
 test-prod:
 	@echo "Running QEMU test with production config..."
-	CONFIG_FILE=k3s.yaml ./$(TEST_DIR)/qemu-test.sh server
+	CONFIG_FILE=k3s.yaml.example ./$(TEST_DIR)/qemu-test.sh server
 
 # -----------------------------------------------------------------------------
 # Multi-Node Cluster Testing
