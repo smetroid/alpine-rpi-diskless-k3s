@@ -6,10 +6,3 @@ title = "Alpine RPi Diskless gitleaks config"
 # Extend the default ruleset
 [extend]
 useDefault = true
-
-[allowlist]
-description = "Known safe files and test data"
-paths = [
-    "(test|docs)/",
-    ".*\\.md$",
-]
