@@ -9,9 +9,9 @@ cluster:
 network:
   domain: "local"
   subnet: "192.168.1.0/24"
-  gateway: "192.168.1.254"
+  gateway: "192.168.1.1"
   dns_servers:
-    - "192.168.1.254"
+    - "192.168.1.1"
   
   # MetalLB LoadBalancer IP range
   loadbalancer_pool:
@@ -19,17 +19,17 @@ network:
     end: "192.168.1.199"
 
 nodes:
-  - name: "k3s-21"
+  - name: "k3s-master"
     ip: "192.168.1.21"
     role: "master"
     taints:
       - "CriticalAddonsOnly=true:NoExecute"
   
-  - name: "k3s-22"
+  - name: "k3s-worker-1"
     ip: "192.168.1.22"
     role: "worker"
   
-  - name: "k3s-23"
+  - name: "k3s-worker-2"
     ip: "192.168.1.23"
     role: "worker"
 

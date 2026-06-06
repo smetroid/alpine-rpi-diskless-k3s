@@ -1,5 +1,6 @@
 # Alpine Diskless k3s Cluster Configuration
-# Modify these values to match your environment
+# Copy this file to k3s.yaml and modify values to match your environment.
+# k3s.yaml is gitignored to keep your real values out of the repo.
 
 cluster:
   name: "alpine-k3s"
@@ -9,9 +10,9 @@ cluster:
 network:
   domain: "local"
   subnet: "192.168.1.0/24"
-  gateway: "192.168.1.254"
+  gateway: "192.168.1.1"
   dns_servers:
-    - "192.168.1.254"
+    - "192.168.1.1"
 
   ## MetalLB LoadBalancer IP range
   #loadbalancer_pool:
@@ -19,17 +20,17 @@ network:
   #  end: "192.168.1.80"
 
 nodes:
-  - name: "k3s-21"
+  - name: "k3s-master"
     ip: "192.168.1.21"
     role: "master"
     taints:
       - "CriticalAddonsOnly=true:NoExecute"
 
-  - name: "k3s-22"
+  - name: "k3s-worker-1"
     ip: "192.168.1.22"
     role: "worker"
 
-  - name: "k3s-23"
+  - name: "k3s-worker-2"
     ip: "192.168.1.23"
     role: "worker"
 
@@ -63,7 +64,7 @@ k3s:
 alpine:
   version: "3.22.1"
   architecture: "aarch64"
-  timezone: "America/Denver"
+  timezone: "UTC"
 
   # Additional packages to install
   packages:
@@ -91,8 +92,7 @@ ssh:
 
   # SSH public keys (add your keys here)
   authorized_keys:
-    - "ssh-ed25519 REDACTED_SSH_KEY_1 you@example.com"
-    - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
+    - "ssh-ed25519 AAAA...REPLACE_WITH_YOUR_PUBLIC_KEY your-name@example.com"
 
 # Overlay packages - packages to include in apkovl for early boot
 # Architecture-specific packages will be downloaded automatically

@@ -1,10 +1,12 @@
 # Alpine Diskless k3s Cluster Configuration - QEMU Testing Environment
-# This config mirrors k3s.yaml but with QEMU-appropriate values
+# Copy this file to qemu.yaml and modify values to match your environment.
+# qemu.yaml is gitignored to keep your real values out of the repo.
+# This config mirrors k3s.yaml but with QEMU-appropriate values.
 
 cluster:
   name: "alpine-k3s-test"
   k3s_version: "v1.35.0+k3s1"
-  token: "REDACTED_TOKEN"
+  token: "" # Leave empty to auto-generate, or provide a throwaway test token
 
 network:
   domain: "local"
@@ -71,7 +73,7 @@ k3s:
 alpine:
   version: "3.22.1"
   architecture: "x86_64"
-  timezone: "America/Denver"
+  timezone: "UTC"
 
   # Additional packages to install
   packages:
@@ -110,8 +112,7 @@ ssh:
 
   # SSH public keys (add your keys here)
   authorized_keys:
-    - "ssh-ed25519 REDACTED_SSH_KEY_1 you@example.com"
-    - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
+    - "ssh-ed25519 AAAA...REPLACE_WITH_YOUR_PUBLIC_KEY your-name@example.com"
 
 # Overlay packages - packages to include in apkovl for early boot
 # Architecture-specific packages will be downloaded automatically
