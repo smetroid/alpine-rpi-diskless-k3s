@@ -16,14 +16,14 @@ if [ -n "$CONFIG_FILE" ]; then
 fi
 
 # Build directory - determine based on config basename
-# Production configs (k3s.yaml, cluster-*.yaml) -> builds/
-# Testing configs (qemu.yaml, *-test.yaml, *-qemu.yaml) -> builds-qemu/
+# Production configs (k3s.yaml.example, cluster-*.yaml) -> builds/
+# Testing configs (qemu.yaml.example, *-test.yaml, *-qemu.yaml) -> builds-qemu/
 determine_build_dir() {
     local config_basename
     config_basename="$(basename "${CONFIG_FILE}")"
 
     case "$config_basename" in
-        qemu.yaml|*-test.yaml|*-qemu.yaml)
+        qemu.yaml|qemu.yaml.example|*-test.yaml|*-qemu.yaml|*-test.yaml.example|*-qemu.yaml.example)
             echo "builds-qemu"
             ;;
         *)
@@ -190,7 +190,7 @@ echo "Access your cluster:"
 # Determine if this is a QEMU test config
 CONFIG_BASENAME="$(basename "$CONFIG_FILE")"
 case "$CONFIG_BASENAME" in
-    qemu.yaml|*-test.yaml|*-qemu.yaml)
+    qemu.yaml|qemu.yaml.example|*-test.yaml|*-qemu.yaml|*-test.yaml.example|*-qemu.yaml.example)
         # QEMU testing - show localhost:port access
         yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
             # Calculate SSH port from IP last octet (10.99.0.15 -> 2215)
