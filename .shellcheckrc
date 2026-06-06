@@ -10,6 +10,25 @@ disable=SC1091
 # Double quote to prevent globbing — intentionally unquoted in many places
 disable=SC2086
 
+# local undefined in POSIX sh — Alpine's busybox ash supports local
+disable=SC3043
+
+# trap ERR undefined in POSIX sh — Alpine's busybox ash supports it
+disable=SC3047
+
+# Declare and assign separately — pervasive pattern in codebase
+disable=SC2155
+
+# Prefer mapfile/read -a over split — pervasive, works correctly
+disable=SC2207
+
+# Function references args but none passed — false positive
+disable=SC2120
+disable=SC2119
+
 # Allow scripts to find sourced files relative to the script location
 source-path=SCRIPTDIR
 source-path=SCRIPTDIR/../lib
+
+# External sources allowed
+external-sources=true

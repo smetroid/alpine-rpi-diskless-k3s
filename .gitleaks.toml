@@ -1,0 +1,15 @@
+# Gitleaks configuration for alpine-rpi-diskless
+# Docs: https://github.com/gitleaks/gitleaks
+
+title = "Alpine RPi Diskless gitleaks config"
+
+# Extend the default ruleset
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known safe files and test data"
+paths = [
+    "(test|docs)/",
+    ".*\\.md$",
+]
