@@ -17,7 +17,7 @@ TEST_DIR := test
 # Export CONFIG_FILE for scripts (they check env var before arguments)
 # Build directory is auto-detected by scripts based on config basename:
 #   - builds/         for k3s.yaml.example, cluster-*.yaml
-#   - builds-qemu/    for qemu.yaml.example, *-test.yaml, *-qemu.yaml
+#   - builds-qemu/    for qemu.yaml.example, *-test.yaml, *-qemu.yaml, *.example
 export CONFIG_FILE := $(CONFIG)
 
 # Default node (first node in config)
