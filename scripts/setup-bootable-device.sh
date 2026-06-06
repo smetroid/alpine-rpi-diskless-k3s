@@ -57,7 +57,7 @@ fi
 
 log_warn "This will completely format $SD_DEVICE"
 log_warn "All data on the device will be lost!"
-read -p "Are you sure? (yes/no): " confirm
+read -r -p "Are you sure? (yes/no): " confirm
 
 if [ "$confirm" != "yes" ]; then
     log_info "Operation cancelled"
@@ -120,11 +120,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         # Try to change the data partition to Linux type (0x83) using fdisk
         echo "🔧 Converting data partition to Linux type..."
         if command -v fdisk >/dev/null 2>&1; then
-            printf 't\n2\n83\nw\n' | sudo fdisk $SD_DEVICE 2>/dev/null && {
+            if printf 't\n2\n83\nw\n' | sudo fdisk $SD_DEVICE 2>/dev/null; then
                 echo "✅ Data partition type set to Linux"
-            } || {
+            else
                 echo "⚠️  Could not change partition type (Alpine will handle formatting)"
-            }
+            fi
         else
             echo "ℹ️  fdisk not available - partition will be reformatted by Alpine"
         fi
@@ -165,8 +165,9 @@ unit: sectors
 ${SD_DEVICE}1 : start=2048, size=$BOOT_SIZE_SECTORS, type=c, bootable
 ${SD_DEVICE}2 : start=$((2048 + BOOT_SIZE_SECTORS)), type=83
 EOF
+        sfdisk_rc=$?
 
-        if [ $? -eq 0 ]; then
+        if [ "$sfdisk_rc" -eq 0 ]; then
             log_success "Boot and data partitions created with sfdisk"
         else
             log_error "sfdisk failed, trying manual approach..."
@@ -175,7 +176,7 @@ EOF
                 echo "Please manually create partitions using cfdisk:"
                 echo "1. Boot partition (FAT32): Start=1MiB, Size=$BOOT_PARTITION_SIZE, Type=c, Bootable=yes"
                 echo "2. Data partition (Linux): Use remaining space, Type=83"
-                read -p "Press Enter to open cfdisk..."
+                read -r -p "Press Enter to open cfdisk..."
                 sudo cfdisk $SD_DEVICE
             else
                 echo "❌ No suitable partitioning tools found. Please install util-linux package."
@@ -352,7 +353,7 @@ if [ ! -f "$ORIGINAL_DIR/$ALPINE_IMAGE" ]; then
     exit 1
 fi
 
-cd $MOUNT_BOOT
+cd "$MOUNT_BOOT" || exit 1
 
 # Extract with verbose output and error checking
 if ! sudo tar -xzf "$ORIGINAL_DIR/$ALPINE_IMAGE"; then
@@ -461,7 +462,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     sleep 5
     
     # Change to a different directory to avoid keeping temp directory busy
-    cd /tmp
+    cd /tmp || exit 1
     
     # Now try to remove the temp directory with better cleanup
     if ! rmdir "$MOUNT_BOOT" 2>/dev/null; then

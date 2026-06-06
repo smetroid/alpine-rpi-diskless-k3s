@@ -16,7 +16,8 @@ cache_root() {
 # Get a specific cache subdirectory
 cache_dir() {
     local subdir="$1"
-    local root=$(cache_root)
+    local root
+    root=$(cache_root)
     local cache_path="${root}/${subdir}"
 
     # Create cache directory if it doesn't exist
@@ -35,7 +36,8 @@ cache_get() {
     local filename="$2"
     local dest="$3"
 
-    local cache_path=$(cache_dir "$subdir")
+    local cache_path
+    cache_path=$(cache_dir "$subdir")
     local cached_file="${cache_path}/${filename}"
 
     if [ -f "$cached_file" ]; then
@@ -61,11 +63,13 @@ cache_put() {
     local filename="$2"
     local source="$3"
 
-    local cache_path=$(cache_dir "$subdir")
+    local cache_path
+    cache_path=$(cache_dir "$subdir")
     local cached_file="${cache_path}/${filename}"
 
     # Create cache directory including nested subdirectories if needed
-    local cached_dir=$(dirname "$cached_file")
+    local cached_dir
+    cached_dir=$(dirname "$cached_file")
     mkdir -p "$cached_dir"
 
     # Copy to cache
@@ -83,7 +87,8 @@ cache_put() {
 cache_clear() {
     local subdir="$1"
 
-    local root=$(cache_root)
+    local root
+    root=$(cache_root)
 
     if [ -z "$subdir" ]; then
         # Clear entire cache
@@ -109,7 +114,8 @@ cache_clear() {
 
 # Show cache statistics
 cache_stats() {
-    local root=$(cache_root)
+    local root
+    root=$(cache_root)
 
     if [ ! -d "$root" ]; then
         echo "Cache is empty"
@@ -120,7 +126,8 @@ cache_stats() {
     echo ""
 
     # Total size
-    local total_size=$(du -sh "$root" 2>/dev/null | cut -f1)
+    local total_size
+    total_size=$(du -sh "$root" 2>/dev/null | cut -f1)
     echo "Total size: ${total_size}"
     echo ""
 
@@ -128,8 +135,10 @@ cache_stats() {
     for subdir in apk k3s alpine-iso; do
         local cache_path="${root}/${subdir}"
         if [ -d "$cache_path" ]; then
-            local count=$(find "$cache_path" -type f | wc -l | tr -d ' ')
-            local size=$(du -sh "$cache_path" 2>/dev/null | cut -f1)
+            local count
+            count=$(find "$cache_path" -type f | wc -l | tr -d ' ')
+            local size
+            size=$(du -sh "$cache_path" 2>/dev/null | cut -f1)
             echo "  ${subdir}: ${count} files, ${size}"
         fi
     done

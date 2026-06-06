@@ -60,7 +60,7 @@ if [ -d /root/.ssh ]; then
 fi
 
 # Create the runtime snapshot tarball
-cd "$TEMP_DIR"
+cd "$TEMP_DIR" || exit 1
 if tar -czf "$BACKUP_FILE" . 2>/dev/null; then
     echo "✅ Runtime config saved: $BACKUP_FILE"
     # Verify the archive

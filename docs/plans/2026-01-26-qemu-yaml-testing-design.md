@@ -31,7 +31,7 @@ Currently, the Alpine diskless k3s project has a single configuration (`k3s.yaml
 ```
 k3s.yaml (production)          qemu.yaml (testing)
 ├── arch: aarch64              ├── arch: x86_64
-├── network: 192.168.1.x     ├── network: 10.0.2.x
+├── network: 192.168.1.x       ├── network: 10.0.2.x
 ├── storage: /dev/sda          ├── storage: /dev/sda
 ├── nodes: k3s-21/22/23        ├── nodes: qemu-test-1/2
 └── overlay_packages           └── overlay_packages
@@ -322,8 +322,7 @@ ssh:
   permit_root_login: true
   password_authentication: true
   authorized_keys:
-    - "ssh-ed25519 REDACTED_SSH_KEY_1 you@example.com"
-    - "ssh-ed25519 REDACTED_SSH_KEY_2 user@host.local"
+    - "ssh-ed25519 AAAA...REPLACE_WITH_YOUR_PUBLIC_KEY your-name@example.com"
 
 overlay_packages:
   - name: "openssh"

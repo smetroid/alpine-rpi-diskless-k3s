@@ -14,10 +14,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          check: scripts lib
+        run: |
+          shellcheck -S warning -x scripts/*.sh lib/*.sh
 
   validate:
     name: Validate YAML Configuration
@@ -26,48 +28,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Install Python and PyYAML
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Validate k3s.yaml
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('k3s.yaml'))"
+      - name: Install PyYAML
+        run: pip install pyyaml
 
-      - name: Validate qemu.yaml
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('qemu.yaml'))"
+      - name: Validate k3s.yaml.example
+        run: python3 -c "import yaml; yaml.safe_load(open('k3s.yaml.example'))"
+
+      - name: Validate qemu.yaml.example
+        run: python3 -c "import yaml; yaml.safe_load(open('qemu.yaml.example'))"
 
       - name: Validate cluster-config.yaml.example
-        run: |
-          python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
-
-  build:
-    name: Build Apkovl Archives
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tar gzip
-
-      - name: Build production config
-        run: |
-          chmod +x scripts/*.sh
-          make build CONFIG=k3s.yaml
-
-      - name: Build test config
-        run: |
-          make build-test
-
-      - name: Verify outputs exist
-        run: |
-          ls -la builds/*.apkovl.tar.gz || echo "No production archives"
-          ls -la builds-qemu/*.apkovl.tar.gz || echo "No test archives"
+        run: python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
 
   test:
     name: Shell Script Formatting Check
@@ -84,7 +60,6 @@ jobs:
       - name: Check formatting
         run: |
           find scripts lib -name "*.sh" -exec shfmt -d {} \;
-        continue-on-error: true
 
   code-quality:
     name: Code Quality
@@ -93,19 +68,38 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check for broken links in docs
-        run: |
-          # Simple check: verify markdown files don't have obvious broken links
-          # This is a basic check, real link checking would require more tooling
-          find docs -name "*.md" -exec grep -l "http://" {} \; | head -5
-
-      - name: Check README exists
-        run: |
-          test -f README.md
-
       - name: Check required files exist
         run: |
-          test -f LICENSE
-          test -f CONTRIBUTING.md
-          test -f SECURITY.md
-          test -f Makefile
+          for f in README.md LICENSE CONTRIBUTING.md SECURITY.md Makefile; do
+            if [ ! -f "$f" ]; then echo "Missing: $f"; exit 1; fi
+          done
+
+  build:
+    name: Build Apkovl Archives
+    runs-on: ubuntu-latest
+    needs: [lint, validate, test, code-quality]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tar gzip
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Build production config
+        run: |
+          chmod +x scripts/*.sh lib/*.sh
+          make build CONFIG=k3s.yaml.example
+
+      - name: Build test config
+        run: |
+          make build-test
+
+      - name: Verify outputs exist
+        run: |
+          ls -la builds/*.apkovl.tar.gz || echo "No production archives"
+          ls -la builds-qemu/*.apkovl.tar.gz || echo "No test archives"

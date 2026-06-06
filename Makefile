@@ -10,14 +10,14 @@
 export PATH := /opt/homebrew/bin:$(PATH)
 
 # Configuration
-CONFIG ?= k3s.yaml
+CONFIG ?= k3s.yaml.example
 SCRIPTS_DIR := scripts
 TEST_DIR := test
 
 # Export CONFIG_FILE for scripts (they check env var before arguments)
 # Build directory is auto-detected by scripts based on config basename:
-#   - builds/         for k3s.yaml, cluster-*.yaml
-#   - builds-qemu/    for qemu.yaml, *-test.yaml, *-qemu.yaml
+#   - builds/         for k3s.yaml.example, cluster-*.yaml
+#   - builds-qemu/    for qemu.yaml.example, *-test.yaml, *-qemu.yaml, *.example
 export CONFIG_FILE := $(CONFIG)
 
 # Default node (first node in config)
@@ -41,7 +41,7 @@ export TEMPLATES_DIR
         qemu-cluster test-qemu \
         build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats \
         lint format shellcheck-shfmt \
-        install-deps backup verify
+        install-deps install-hooks backup verify
 
 # Default target
 help:
@@ -72,17 +72,17 @@ help:
 	@echo "                          Start worker VM (run after server, in terminal 2)"
 	@echo "  make test-cluster-status  Show running test VMs"
 	@echo "  make test-cluster-stop    Stop all test VMs"
-	@echo "  make test-qemu          Build + boot with qemu.yaml (single node)"
-	@echo "  make test-prod          Boot test with production config (k3s.yaml)"
+	@echo "  make test-qemu          Build + boot with qemu.yaml.example (single node)"
+	@echo "  make test-prod          Boot test with production config (k3s.yaml.example)"
 	@echo ""
 	@echo "Configuration:"
-	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml)"
+	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml.example)"
 	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-21)"
 	@echo "  DEVICE=<path>           Block device for SD card setup"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build CONFIG=my-cluster.yaml"
-	@echo "  make build-test          # Build QEMU test config"
+	@echo "  make build-test          # Build QEMU test config (qemu.yaml.example)"
 	@echo "  make test-qemu           # Full QEMU test workflow"
 	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
 	@echo ""
@@ -93,6 +93,7 @@ help:
 	@echo ""
 	@echo "Template / Verification Targets:"
 	@echo "  make install-deps        Download gomplate binary to .local/bin/"
+	@echo "  make install-hooks       Install gitleaks pre-commit hook"
 	@echo "  make backup              Snapshot current builds/ as reference baseline"
 	@echo "  make verify              Diff new builds against reference (excludes machine-id, SSH keys)"
 
@@ -123,10 +124,10 @@ build-manifests:
 build-archives:
 	./$(SCRIPTS_DIR)/create-apkovl-archives.sh $(CONFIG)
 
-# Build test configuration (qemu.yaml)
+# Build test configuration (qemu.yaml.example)
 build-test:
-	@echo "Building test apkovl archives from qemu.yaml..."
-	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml
+	@echo "Building test apkovl archives from qemu.yaml.example..."
+	./$(SCRIPTS_DIR)/build-from-yaml.sh qemu.yaml.example
 
 # Create partitioned disk template for QEMU testing
 # This creates data-partitioned-template.qcow2 with pre-formatted partitions
@@ -174,12 +175,12 @@ test:
 # Full QEMU test workflow - build and boot test config (single node for quick testing)
 test-qemu: build-test
 	@echo "Running single-node QEMU test..."
-	CONFIG_FILE=qemu.yaml ./$(TEST_DIR)/qemu-test.sh server
+	CONFIG_FILE=qemu.yaml.example ./$(TEST_DIR)/qemu-test.sh server
 
 # Boot test with production config (for RPi hardware testing)
 test-prod:
 	@echo "Running QEMU test with production config..."
-	CONFIG_FILE=k3s.yaml ./$(TEST_DIR)/qemu-test.sh server
+	CONFIG_FILE=k3s.yaml.example ./$(TEST_DIR)/qemu-test.sh server
 
 # -----------------------------------------------------------------------------
 # Multi-Node Cluster Testing
@@ -322,7 +323,18 @@ format:
 		echo "shfmt not installed. Install with: go install mvdan.cc/sh/v3/cmd/shfmt@latest"; \
 	fi
 
-# Run all linting (shellcheck + formatting check)
+# Install gitleaks pre-commit hook (configures git to use .githooks/)
+install-hooks:
+	@echo "Installing git hooks from .githooks/..."
+	@git config core.hooksPath .githooks
+	@echo "✓ Hooks configured. Running pre-commit check..."
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		echo "  gitleaks is installed"; \
+	else \
+		echo "  Install gitleaks: brew install gitleaks (macOS) or go install github.com/gitleaks/gitleaks/v8/cmd/gitleaks@latest"; \
+	fi
+	@chmod +x .githooks/*
+
 lint: shellcheck-shfmt
 	@echo ""
 	@echo "Checking script formatting..."

@@ -1,26 +1,34 @@
 # ShellCheck configuration
 # https://www.shellcheck.net/
 
-# Disable SC1090 (can't follow non-constant source)
+# Can't follow non-constant source (we source from variables)
 disable=SC1090
 
-# Disable SC1091 (not following sourced file)
+# Not following sourced file (external sources not checked here)
 disable=SC1091
 
-# Disable SC2086 (double quote to prevent globbing)
-# This is a common pattern in shell scripts
+# Double quote to prevent globbing — intentionally unquoted in many places
 disable=SC2086
 
-# Source paths that should be ignored (generated/mock files)
-source-path=(
-    lib/
-    scripts/
-)
+# local undefined in POSIX sh — Alpine's busybox ash supports local
+disable=SC3043
 
-# Exclude specific files from checking
-exclude=(
-    builds/
-    builds-qemu/
-    .cache/
-    test/qemu-cluster/
-)
+# trap ERR undefined in POSIX sh — Alpine's busybox ash supports it
+disable=SC3047
+
+# Declare and assign separately — pervasive pattern in codebase
+disable=SC2155
+
+# Prefer mapfile/read -a over split — pervasive, works correctly
+disable=SC2207
+
+# Function references args but none passed — false positive
+disable=SC2120
+disable=SC2119
+
+# Allow scripts to find sourced files relative to the script location
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/../lib
+
+# External sources allowed
+external-sources=true

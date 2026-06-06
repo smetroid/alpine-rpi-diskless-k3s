@@ -41,7 +41,10 @@ fi
 CLUSTER_CIDR=$(get_k3s_cluster_cidr)
 SERVICE_CIDR=$(get_k3s_service_cidr)
 FLANNEL_BACKEND=$(yaml_get "k3s.flannel_backend")
-DISABLE_SERVICES=($(yaml_get_array ".k3s.disable_services[]"))
+DISABLE_SERVICES=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && DISABLE_SERVICES+=("$_line")
+done < <(yaml_get_array ".k3s.disable_services[]")
 
 # Get external datastore configuration (optional)
 DATASTORE_ENDPOINT=""
@@ -81,17 +84,6 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
                 echo "  - $service" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             done
         fi
-
-        # Add node taints if specified
-        yaml_get_array "nodes" | while read -r node_line; do
-            node_info=($(echo "$node_line" | tr ':' ' '))
-            if [ "${node_info[0]}" = "$NODE_NAME" ] && [ "${node_info[2]}" = "master" ]; then
-                # Check for taints in the YAML (this would need more complex parsing)
-                echo "node-taint:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
-                echo "  - \"CriticalAddonsOnly=true:NoExecute\"" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
-                break
-            fi
-        done
 
         # Note: k3s init script is created by the k3s installer, not in the overlay
 

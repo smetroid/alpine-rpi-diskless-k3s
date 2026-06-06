@@ -1,8 +1,9 @@
 # Alpine diskless k3s .gitignore
 
-# Prevent accidental upload of YAML config files (except the template)
+# Prevent accidental upload of YAML config files.
+# Templates use the *.yaml.example suffix and are tracked normally
+# (they do not match *.yaml, so no negation is needed).
 *.yaml
-!cluster-config.yaml
 
 # Prevent accidental upload of Alpine images and build artifacts
 *.tar.gz

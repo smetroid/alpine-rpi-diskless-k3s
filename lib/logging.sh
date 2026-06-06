@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # logging.sh - Unified logging library for Alpine diskless bootstrap scripts
 #

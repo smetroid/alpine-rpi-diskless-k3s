@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034
 
 description="Commit LBU changes on shutdown/reboot"
 name="lbu persist"
@@ -22,8 +24,7 @@ stop() {
     if [ -d /mnt/data ] && mountpoint -q /mnt/data; then
         # Use the custom lbu-commit-runtime created by system-bootstrap
         if [ -x /usr/local/bin/lbu-commit-runtime ]; then
-            /usr/local/bin/lbu-commit-runtime
-            if [ $? -eq 0 ]; then
+            if /usr/local/bin/lbu-commit-runtime; then
                 einfo "Runtime changes committed"
             else
                 ewarn "LBU commit failed"
