@@ -46,6 +46,11 @@ while IFS= read -r _line; do
     [[ -n "$_line" ]] && DISABLE_SERVICES+=("$_line")
 done < <(yaml_get_array ".k3s.disable_services[]")
 
+KUBE_APISERVER_ARGS=()
+while IFS= read -r _line; do
+    [[ -n "$_line" ]] && KUBE_APISERVER_ARGS+=("$_line")
+done < <(yaml_get_array ".k3s.kube_apiserver_arg[]")
+
 # Get external datastore configuration (optional)
 DATASTORE_ENDPOINT=""
 if get_datastore_endpoint; then
@@ -82,6 +87,14 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
             echo "disable:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             for service in "${DISABLE_SERVICES[@]}"; do
                 echo "  - $service" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
+            done
+        fi
+
+        # Add kube-apiserver args
+        if [ ${#KUBE_APISERVER_ARGS[@]} -gt 0 ]; then
+            echo "kube-apiserver-arg:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
+            for arg in "${KUBE_APISERVER_ARGS[@]}"; do
+                echo "  - \"$arg\"" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
             done
         fi
 

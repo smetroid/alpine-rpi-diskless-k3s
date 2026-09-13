@@ -39,6 +39,11 @@ k3s:
     - "servicelb"
     - "traefik"
   
+  # Extra arguments passed directly to the kube-apiserver
+  # Recommended for resource-constrained nodes to reduce etcd event churn
+  # kube_apiserver_arg:
+  #   - "event-ttl=30m"
+
   # Cluster networking
   cluster_cidr: "10.42.0.0/16"
   service_cidr: "10.43.0.0/16"
