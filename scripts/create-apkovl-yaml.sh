@@ -46,14 +46,14 @@ process_overlay_packages() {
     local apkovl_dir="$1"
     local config_file="$2"
     local arch
-    arch=$(yaml_get "alpine.architecture" "$config_file")
+    arch=$(yq e '.alpine.architecture // ""' "$config_file")
     local alpine_version
-    alpine_version=$(yaml_get "alpine.version" "$config_file")
+    alpine_version=$(yq e '.alpine.version // ""' "$config_file")
     local alpine_major="${alpine_version%.*}"
     local base_url="http://dl-cdn.alpinelinux.org/alpine/v${alpine_major}/main/${arch}"
 
     local packages
-    packages=$(yaml_get_array ".overlay_packages[].name" "$config_file")
+    packages=$(yq e '.overlay_packages[].name' "$config_file" 2>/dev/null)
 
     if [ -z "$packages" ]; then
         echo "No overlay packages specified"
@@ -130,7 +130,7 @@ generate_auto_start_services() {
     local config_file="$2"
 
     local packages
-    packages=$(yaml_get_array ".auto_start_services[]" "$config_file")
+    packages=$(yq e '.auto_start_services[]' "$config_file" 2>/dev/null)
 
     if [ -z "$packages" ]; then
         echo "No auto-start services configured"
@@ -172,9 +172,9 @@ download_k3s_binary() {
     local apkovl_dir="$1"
     local config_file="$2"
     local arch
-    arch=$(yaml_get "alpine.architecture" "$config_file")
+    arch=$(yq e '.alpine.architecture // ""' "$config_file")
     local version
-    version=$(yaml_get "cluster.k3s_version" "$config_file")
+    version=$(yq e '.cluster.k3s_version // ""' "$config_file")
 
     # Map Alpine architecture names to k3s/GitHub release architecture names
     case "$arch" in
@@ -283,26 +283,28 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Export config file for yaml-parser
 export CONFIG_FILE
-
-# Load YAML parser
-source "$LIB_DIR/yaml-parser.sh"
 
 # Validate configuration
 echo "Validating configuration..."
-if ! validate_config; then
+if ! "$SCRIPT_DIR/validate-config.sh" "$CONFIG_FILE"; then
     exit 1
 fi
 
 # Get configuration values
-CLUSTER_NAME=$(get_cluster_name)
-GATEWAY=$(get_network_gateway)
+CLUSTER_NAME=$(yq e '.cluster.name // ""' "$CONFIG_FILE")
+GATEWAY=$(yq e '.network.gateway // ""' "$CONFIG_FILE")
 DNS_SERVERS=()
 while IFS= read -r _line; do
     [[ -n "$_line" ]] && DNS_SERVERS+=("$_line")
-done < <(get_dns_servers)
-DOMAIN=$(yaml_get "network.domain")
+done < <(yq e '.network.dns_servers[]' "$CONFIG_FILE" 2>/dev/null)
+if [ ${#DNS_SERVERS[@]} -eq 0 ]; then
+    # Fallback to dns_upstream for gateway config
+    while IFS= read -r _line; do
+        [[ -n "$_line" ]] && DNS_SERVERS+=("$_line")
+    done < <(yq e '.network.dns_upstream[]' "$CONFIG_FILE" 2>/dev/null)
+fi
+DOMAIN=$(yq e '.network.domain // ""' "$CONFIG_FILE")
 
 echo "Cluster: $CLUSTER_NAME"
 echo "Gateway: $GATEWAY"
@@ -325,9 +327,25 @@ fi
 # Read the public key
 CLUSTER_PUBLIC_KEY=$(cat "$CLUSTER_KEY_DIR/cluster_id_rsa.pub")
 
-# Process each node
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
-    echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE..."
+# Process each node using indexed access (supports flat and enriched schema)
+NODE_COUNT=$(yq e '.nodes | length' "$CONFIG_FILE")
+for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+    NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+    NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+    NODE_IP=$(yq e ".nodes[$NODE_IDX].ip" "$CONFIG_FILE")
+    HAS_INTERFACES=$(yq e ".nodes[$NODE_IDX].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null && echo true || echo false)
+
+    if $HAS_INTERFACES; then
+        LAN_IP=$(yq e ".nodes[$NODE_IDX].interfaces.lan.ip" "$CONFIG_FILE")
+        LAN_DEVICE=$(yq e ".nodes[$NODE_IDX].interfaces.lan.device" "$CONFIG_FILE")
+        WAN_DEVICE=$(yq e ".nodes[$NODE_IDX].interfaces.wan.device" "$CONFIG_FILE")
+        WAN_PROTO=$(yq e ".nodes[$NODE_IDX].interfaces.wan.proto" "$CONFIG_FILE")
+        # Extract bare IP for k3s config
+        NODE_IP=$(echo "$LAN_IP" | cut -d'/' -f1)
+        echo "Creating apkovl for $NODE_NAME ($LAN_IP on $LAN_DEVICE) - $NODE_ROLE"
+    else
+        echo "Creating apkovl for $NODE_NAME ($NODE_IP) - $NODE_ROLE"
+    fi
     
     # Create directory structure
     mkdir -p "${NODE_NAME}-apkovl"/{etc/{apk,network,ssh,runlevels/{default,boot,sysinit},init.d,local.d,sysctl.d},root/.ssh,var/lib/k3s,usr/local/bin}
@@ -363,46 +381,106 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     # https://gitlab.alpinelinux.org/alpine/mkinitfs/-/issues/8
     touch "${NODE_NAME}-apkovl/etc/.default_boot_services"
     
-    # Network configuration - convert CIDR to netmask
-    SUBNET=$(yaml_get "network.subnet")
-    CIDR_BITS=$(echo "$SUBNET" | cut -d'/' -f2)
-    
-    # Convert CIDR to netmask (common cases)
-    case "$CIDR_BITS" in
-        24) NETMASK="255.255.255.0" ;;
-        16) NETMASK="255.255.0.0" ;;
-        8)  NETMASK="255.0.0.0" ;;
-        25) NETMASK="255.255.255.128" ;;
-        26) NETMASK="255.255.255.192" ;;
-        27) NETMASK="255.255.255.224" ;;
-        28) NETMASK="255.255.255.240" ;;
-        *)  NETMASK="255.255.255.0" ;; # Default to /24
-    esac
-    
-    export NODE_IP NETMASK GATEWAY DOMAIN
-    export DNS_SERVER="${DNS_SERVERS[0]}"
-    render_template "config/network-interfaces.tmpl" "${NODE_NAME}-apkovl/etc/network/interfaces"
+    # Network configuration
+    if $HAS_INTERFACES; then
+        # Enriched schema: dual-interface config
+        # LAN interface (static, from interfaces.lan)
+        LAN_CIDR_BITS=$(echo "$LAN_IP" | cut -d'/' -f2)
+        case "$LAN_CIDR_BITS" in
+            24) LAN_NETMASK="255.255.255.0" ;;
+            16) LAN_NETMASK="255.255.0.0" ;;
+            8)  LAN_NETMASK="255.0.0.0" ;;
+            25) LAN_NETMASK="255.255.255.128" ;;
+            26) LAN_NETMASK="255.255.255.192" ;;
+            27) LAN_NETMASK="255.255.255.224" ;;
+            28) LAN_NETMASK="255.255.255.240" ;;
+            *)  LAN_NETMASK="255.255.255.0" ;;
+        esac
+
+        cat > "${NODE_NAME}-apkovl/etc/network/interfaces" << NETEOF
+auto lo
+iface lo inet loopback
+
+auto ${LAN_DEVICE}
+iface ${LAN_DEVICE} inet static
+    address ${LAN_IP}
+    netmask ${LAN_NETMASK}
+    dns-nameserver ${DNS_SERVERS[0]}
+    dns-domain ${DOMAIN}
+
+auto ${WAN_DEVICE}
+iface ${WAN_DEVICE} inet ${WAN_PROTO}
+NETEOF
+
+        # For static WAN, add IP config
+        WAN_IP=$(yq e ".nodes[$NODE_IDX].interfaces.wan.ip" "$CONFIG_FILE")
+        if [ "$WAN_PROTO" = "static" ] && [ -n "$WAN_IP" ]; then
+            WAN_CIDR_BITS=$(echo "$WAN_IP" | cut -d'/' -f2)
+            case "$WAN_CIDR_BITS" in
+                24) WAN_NETMASK="255.255.255.0" ;;
+                16) WAN_NETMASK="255.255.0.0" ;;
+                8)  WAN_NETMASK="255.0.0.0" ;;
+                *)  WAN_NETMASK="255.255.255.0" ;;
+            esac
+            WAN_ADDR=$(echo "$WAN_IP" | cut -d'/' -f1)
+            cat >> "${NODE_NAME}-apkovl/etc/network/interfaces" << NETEOF
+    address ${WAN_ADDR}
+    netmask ${WAN_NETMASK}
+NETEOF
+        fi
+
+        # Gateway (sysctl IP forwarding handles routing — no gateway needed on WAN)
+
+        # Export vars for downstream templates
+        export NODE_IP DNS_SERVER="${DNS_SERVERS[0]}" DOMAIN
+
+        # Create sysctl.d entry for IP forwarding (required for NAT/routing)
+        cat > "${NODE_NAME}-apkovl/etc/sysctl.d/99-gateway.conf" << 'SYSCTLEOF'
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+SYSCTLEOF
+    else
+        # Flat schema: single-interface config (backward compat)
+        SUBNET=$(yq e '.network.subnet // ""' "$CONFIG_FILE")
+        CIDR_BITS=$(echo "$SUBNET" | cut -d'/' -f2)
+        
+        # Convert CIDR to netmask (common cases)
+        case "$CIDR_BITS" in
+            24) NETMASK="255.255.255.0" ;;
+            16) NETMASK="255.255.0.0" ;;
+            8)  NETMASK="255.0.0.0" ;;
+            25) NETMASK="255.255.255.128" ;;
+            26) NETMASK="255.255.255.192" ;;
+            27) NETMASK="255.255.255.224" ;;
+            28) NETMASK="255.255.255.240" ;;
+            *)  NETMASK="255.255.255.0" ;; # Default to /24
+        esac
+        
+        export NODE_IP NETMASK GATEWAY DOMAIN
+        export DNS_SERVER="${DNS_SERVERS[0]}"
+        render_template "config/network-interfaces.tmpl" "${NODE_NAME}-apkovl/etc/network/interfaces"
+    fi
 
     # Resolve configuration
     render_template "config/resolv.conf.tmpl" "${NODE_NAME}-apkovl/etc/resolv.conf"
 
     # APK repositories configuration
-    ALPINE_VERSION=$(yaml_get "alpine.version" "$CONFIG_FILE")
+    ALPINE_VERSION=$(yq e '.alpine.version // ""' "$CONFIG_FILE")
     ALPINE_MAJOR=$(echo "$ALPINE_VERSION" | cut -d'.' -f1,2)
     export ALPINE_MAJOR
     render_template "config/apk-repositories.tmpl" "${NODE_NAME}-apkovl/etc/apk/repositories"
 
     # SSH daemon configuration
-    SSH_PORT=$(yaml_get "ssh.port")
-    PERMIT_ROOT=$(yaml_get "ssh.permit_root_login")
-    PASS_AUTH=$(yaml_get "ssh.password_authentication")
+    SSH_PORT=$(yq e '.ssh.port // ""' "$CONFIG_FILE")
+    PERMIT_ROOT=$(yq e '.ssh.permit_root_login // ""' "$CONFIG_FILE")
+    PASS_AUTH=$(yq e '.ssh.password_authentication // ""' "$CONFIG_FILE")
 
     export SSH_PORT PERMIT_ROOT PASS_AUTH
     render_template "config/sshd_config.tmpl" "${NODE_NAME}-apkovl/etc/ssh/sshd_config"
 
     # Add SSH authorized keys if provided (overwrite any existing file)
     rm -f "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
-    yaml_get_array ".ssh.authorized_keys[]" | while read -r key; do
+    yq e '.ssh.authorized_keys[]' "$CONFIG_FILE" 2>/dev/null | while read -r key; do
         if [ -n "$key" ]; then
             echo "$key" >> "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
         fi
@@ -420,6 +498,90 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 
     if [ -f "${NODE_NAME}-apkovl/root/.ssh/authorized_keys" ]; then
         chmod 600 "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
+    fi
+
+    # Generate keepalived configuration for gateway nodes
+    if $HAS_INTERFACES; then
+        VRRP_STATE=$(yq e ".nodes[$NODE_IDX].vrrp.state" "$CONFIG_FILE")
+        VRRP_PRIORITY=$(yq e ".nodes[$NODE_IDX].vrrp.priority" "$CONFIG_FILE")
+        if [ -n "$VRRP_STATE" ] && [ -n "$VRRP_PRIORITY" ]; then
+            VIP=$(yq e '.network.vip // ""' "$CONFIG_FILE" 2>/dev/null || true)
+            LAN_DEVICE=$(yq e ".nodes[$NODE_IDX].interfaces.lan.device" "$CONFIG_FILE")
+
+            mkdir -p "${NODE_NAME}-apkovl/etc/keepalived"
+
+            cat > "${NODE_NAME}-apkovl/etc/keepalived/keepalived.conf" << KEEPEOF
+global_defs {
+    router_id ${NODE_NAME}
+}
+
+vrrp_script chk_openwrt {
+    script "kubectl get pod -n gateway -o wide 2>/dev/null | grep ${NODE_NAME} | grep Running"
+    interval 5
+    weight -50
+    fall 2
+    rise 2
+}
+
+vrrp_instance GATEWAY {
+    state ${VRRP_STATE}
+    interface ${LAN_DEVICE}
+    virtual_router_id 51
+    priority ${VRRP_PRIORITY}
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass changeme123
+    }
+
+    virtual_ipaddress {
+        ${VIP}/24 dev ${LAN_DEVICE}
+    }
+
+    track_script {
+        chk_openwrt
+    }
+
+    notify_master "/etc/keepalived/become-master.sh"
+    notify_backup "/etc/keepalived/become-backup.sh"
+    notify_fault  "/etc/keepalived/become-backup.sh"
+}
+KEEPEOF
+
+            # Notify scripts
+            cat > "${NODE_NAME}-apkovl/etc/keepalived/become-master.sh" << 'NOTIFYEOF'
+#!/bin/sh
+# Node is now active — ensure WAN interface is up
+ip link set eth1 up
+logger "VRRP: became MASTER — gateway active"
+NOTIFYEOF
+
+            cat > "${NODE_NAME}-apkovl/etc/keepalived/become-backup.sh" << 'NOTIFYEOF'
+#!/bin/sh
+logger "VRRP: became BACKUP — standby mode"
+NOTIFYEOF
+
+            chmod +x "${NODE_NAME}-apkovl/etc/keepalived/become-master.sh"
+            chmod +x "${NODE_NAME}-apkovl/etc/keepalived/become-backup.sh"
+        fi
+    fi
+
+    # Generate USB NIC hardening for gateway nodes
+    if $HAS_INTERFACES; then
+        WAN_DEVICE=$(yq e ".nodes[$NODE_IDX].interfaces.wan.device" "$CONFIG_FILE")
+        cat > "${NODE_NAME}-apkovl/etc/local.d/usb-nic.start" << USBEOF
+#!/bin/sh
+# Disable TX offload on WAN NIC — prevents rare transmit queue lockups
+ethtool -K ${WAN_DEVICE} tx off
+USBEOF
+        chmod +x "${NODE_NAME}-apkovl/etc/local.d/usb-nic.start"
+
+        # Pin interface name via udev to prevent rename on reboot
+        mkdir -p "${NODE_NAME}-apkovl/etc/udev/rules.d"
+        cat > "${NODE_NAME}-apkovl/etc/udev/rules.d/10-usb-nic.rules" << UDEVEOF
+SUBSYSTEM=="net", DRIVERS=="r8152", NAME="eth-wan"
+UDEVEOF
     fi
 
     # Configure chrony for NTP time synchronization
@@ -452,7 +614,7 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     # Enable k3s-worker-token service to retrieve join token from master (worker nodes only)
     ln -sf /etc/init.d/k3s-worker-token "${NODE_NAME}-apkovl/etc/runlevels/default/k3s-worker-token"
 
-    # Note: QEMU test device setup moved to test-alpine-diskless-boot.sh
+    # Note: QEMU test device setup is handled by test/qemu-test.sh
 
     # Create storage-init OpenRC service
     render_template "openrc/storage-init.sh" "${NODE_NAME}-apkovl/etc/init.d/storage-init"
@@ -497,7 +659,15 @@ echo ""
 echo "✅ Base apkovl structure created for all nodes from YAML configuration"
 echo ""
 echo "Created apkovl directories:"
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+NODE_COUNT=$(yq e '.nodes | length' "$CONFIG_FILE")
+for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+    NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+    NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+    if yq e ".nodes[$NODE_IDX].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null; then
+        NODE_IP=$(yq e ".nodes[$NODE_IDX].interfaces.lan.ip" "$CONFIG_FILE")
+    else
+        NODE_IP=$(yq e ".nodes[$NODE_IDX].ip" "$CONFIG_FILE")
+    fi
     if [ -d "${NODE_NAME}-apkovl" ]; then
         echo "  ✅ ${NODE_NAME}-apkovl/ (${NODE_ROLE} - ${NODE_IP})"
     else

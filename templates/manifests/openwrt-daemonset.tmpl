@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: openwrt-gateway
+  namespace: gateway
+spec:
+  selector:
+    matchLabels:
+      app: openwrt
+  template:
+    metadata:
+      labels:
+        app: openwrt
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      nodeSelector:
+        role: gateway
+      containers:
+      - name: openwrt
+        image: {{ .Env.OPENWRT_IMAGE }}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: openwrt-config
+          mountPath: /etc/config
+        - name: openwrt-overlay
+          mountPath: /overlay
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+      volumes:
+      - name: openwrt-config
+        hostPath:
+          path: /etc/openwrt/config
+          type: DirectoryOrCreate
+      - name: openwrt-overlay
+        hostPath:
+          path: /etc/openwrt/overlay
+          type: DirectoryOrCreate

@@ -20,5 +20,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No automated CI/CD pipeline
 
 ---
-
-For detailed technical fixes and improvements, see [docs/CHANGELOG-fixes.md](./docs/CHANGELOG-fixes.md).

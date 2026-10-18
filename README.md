@@ -39,12 +39,11 @@ alpine-rpi-diskless/
 │   ├── setup-bootable-device.sh # SD card preparation
 │   └── validate-config.sh     # Configuration validation
 ├── lib/
-│   └── yaml-parser.sh         # YAML parsing library
 ├── builds/                    # Generated output directory
 ├── test/                      # Testing and simulation scripts
 ├── docs/                      # Documentation
 ├── k3s.yaml                   # Main cluster configuration
-└── cluster-config.yaml.example # Example configuration
+└── k3s.yaml.example           # Example configuration
 ```
 
 ## Quick Start
@@ -60,7 +59,7 @@ alpine-rpi-diskless/
 
 1. **Configure your cluster**:
    ```bash
-   cp cluster-config.yaml.example my-cluster.yaml
+   cp k3s.yaml.example my-cluster.yaml
    # Edit my-cluster.yaml with your settings
    ```
 

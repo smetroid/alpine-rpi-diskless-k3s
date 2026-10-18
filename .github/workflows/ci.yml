@@ -42,9 +42,6 @@ jobs:
       - name: Validate qemu.yaml.example
         run: python3 -c "import yaml; yaml.safe_load(open('qemu.yaml.example'))"
 
-      - name: Validate cluster-config.yaml.example
-        run: python3 -c "import yaml; yaml.safe_load(open('cluster-config.yaml.example'))"
-
   test:
     name: Shell Script Formatting Check
     runs-on: ubuntu-latest

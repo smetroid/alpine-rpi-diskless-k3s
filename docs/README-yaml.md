@@ -69,10 +69,10 @@ ssh:
 
 ```bash
 # Prepare SD cards using YAML configuration (replace /dev/sdX with actual device)
-sudo ./setup-sd-card.sh /dev/sdX my-cluster.yaml
+sudo ./scripts/setup-bootable-device.sh /dev/sdX my-cluster.yaml
 
 # Or use default configuration file
-sudo ./setup-sd-card.sh /dev/sdX
+sudo ./scripts/setup-bootable-device.sh /dev/sdX
 
 # Copy apkovl files to boot partitions
 # The script will show which .apkovl.tar.gz files were created
@@ -179,8 +179,8 @@ alpine:
 - `create-apkovl-archives.sh` - Creates .apkovl.tar.gz files from YAML
 
 ### Utility Scripts
-- `setup-sd-card.sh` - Prepares SD cards using YAML configuration
-- `lib/yaml-parser.sh` - YAML parsing library
+- `setup-bootable-device.sh` - Prepares SD cards using YAML configuration
+- `yq` - YAML query tool (required by all build scripts)
 
 ## Multiple Environment Management
 
@@ -234,7 +234,7 @@ Processing worker-01 (worker - 192.168.1.11)...
   • worker-01.apkovl.tar.gz (2.0M) - worker node
 
 Next steps:
-1. Setup SD cards: sudo ./setup-sd-card.sh /dev/diskN my-cluster.yaml
+1. Setup SD cards: sudo ./scripts/setup-bootable-device.sh /dev/diskN my-cluster.yaml
 2. Copy apkovl files to SD card boot partitions:
    cp master-01.apkovl.tar.gz /Volumes/BOOT/
    cp worker-01.apkovl.tar.gz /Volumes/BOOT/

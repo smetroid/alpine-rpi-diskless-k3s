@@ -71,7 +71,7 @@ The SD card setup script only creates the boot partition and installs Alpine Lin
 
 **On Linux:**
 ```bash
-sudo ./setup-sd-card.sh /dev/sdX my-cluster.yaml
+sudo ./scripts/setup-bootable-device.sh /dev/sdX my-cluster.yaml
 ```
 
 **On macOS:**
@@ -80,7 +80,7 @@ sudo ./setup-sd-card.sh /dev/sdX my-cluster.yaml
 diskutil list
 
 # Setup SD card (no additional tools required)
-sudo ./setup-sd-card.sh /dev/diskN my-cluster.yaml
+sudo ./scripts/setup-bootable-device.sh /dev/diskN my-cluster.yaml
 ```
 
 ### 4. Deploy to Cluster
@@ -130,7 +130,7 @@ kubectl get svc --all-namespaces | grep LoadBalancer
 ### Main Workflow Scripts
 - **`validate-config.sh`** - Validates YAML configuration with detailed error checking
 - **`build-from-yaml.sh`** - Complete cluster setup builder (runs all steps)
-- **`setup-sd-card.sh`** - Cross-platform SD card preparation (Linux/macOS)
+- **`setup-bootable-device.sh`** - Cross-platform SD card preparation (Linux/macOS)
 - **`create-apkovl-archives.sh`** - Creates .apkovl.tar.gz files from YAML
 
 ### Individual Component Scripts
@@ -139,7 +139,7 @@ kubectl get svc --all-namespaces | grep LoadBalancer
 - **`generate-manifests-yaml.sh`** - Generates Kubernetes manifests
 
 ### Utility Scripts
-- **`lib/yaml-parser.sh`** - YAML parsing library
+- **`yq`** - YAML query tool for reading configuration values
 
 ## Configuration Reference
 
@@ -647,9 +647,9 @@ alpine-rpi-diskless/
 ├── cluster-config.yaml           # Main configuration file
 ├── build-from-yaml.sh            # Complete setup builder (wrapper)
 ├── validate-config.sh            # Configuration validator (wrapper)
-├── setup-sd-card.sh              # SD card preparation (wrapper)
+├── setup-bootable-device.sh       # SD card preparation
 ├── lib/
-│   └── yaml-parser.sh            # YAML parsing library
+
 ├── scripts/                      # All build scripts
 │   ├── build-from-yaml.sh        # Main build logic
 │   ├── create-apkovl-yaml.sh     # apkovl structure creation

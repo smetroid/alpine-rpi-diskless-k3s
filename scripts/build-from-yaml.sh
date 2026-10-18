@@ -70,7 +70,7 @@ echo ""
 echo "Step 2: Setting up k3s configurations from YAML..."
 "$SCRIPT_DIR/setup-k3s-yaml.sh"
 
-# Step 3: Generate Kubernetes manifests from YAML
+# Step 3: Generate Kubernetes manifests from YAML (including OpenWrt if gateway)
 echo ""
 echo "Step 3: Generating Kubernetes manifests from YAML..."
 "$SCRIPT_DIR/generate-manifests-yaml.sh"
@@ -79,21 +79,18 @@ echo "Step 3: Generating Kubernetes manifests from YAML..."
 echo ""
 echo "Step 4: Finalizing apkovl structure..."
 
-# Load YAML configuration
-source "$LIB_DIR/yaml-parser.sh"
-
 # Load template renderer
 _templates_root="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LIB_DIR/templates.sh"
 
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE" | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "Finalizing apkovl for $NODE_NAME..."
     
     # Get Alpine packages from config
     ALPINE_PACKAGES=()
     while IFS= read -r _line; do
         [[ -n "$_line" ]] && ALPINE_PACKAGES+=("$_line")
-    done < <(get_alpine_packages)
+    done < <(yq e '.alpine.packages[]' "$CONFIG_FILE" 2>/dev/null)
     
     # Build APK install block for template
     APK_INSTALL_BLOCK=""
@@ -103,7 +100,7 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     done
 
     # Get timezone from config
-    ALPINE_TIMEZONE=$(get_alpine_timezone)
+    ALPINE_TIMEZONE=$(yq e '.alpine.timezone // ""' "$CONFIG_FILE")
 
     # Export vars for template rendering
     export APK_INSTALL_BLOCK ALPINE_TIMEZONE
@@ -150,12 +147,20 @@ echo ""
 echo "=== Setup Complete! ==="
 echo ""
 
-cluster_name=$(yaml_get "cluster.name")
+cluster_name=$(yq e '.cluster.name // ""' "$CONFIG_FILE")
 echo "Cluster: $cluster_name"
 
 echo ""
 echo "Files created:"
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+NODE_COUNT=$(yq e '.nodes | length' "$CONFIG_FILE")
+for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+    NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+    NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+    if yq e ".nodes[$NODE_IDX].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null; then
+        NODE_IP=$(yq e ".nodes[$NODE_IDX].interfaces.lan.ip" "$CONFIG_FILE")
+    else
+        NODE_IP=$(yq e ".nodes[$NODE_IDX].ip" "$CONFIG_FILE")
+    fi
     echo "  - ${NODE_NAME}.apkovl.tar.gz ($NODE_ROLE node - $NODE_IP)"
 done
 
@@ -166,43 +171,76 @@ fi
 echo "  - k3s-manifests/ (Kubernetes manifests)"
 echo ""
 
-echo "Configuration Summary:"
-echo "  Network: $(yaml_get "network.subnet"), Gateway: $(yaml_get "network.gateway")"
-echo "  DNS: $(get_dns_servers | tr '\n' ' ')"
-
-if [ "$(yaml_get "services.metallb.enabled")" = "true" ]; then
-    echo "  MetalLB: $(get_metallb_start) - $(get_metallb_end)"
+NET_SUBNET=$(yq e '.network.subnet // ""' "$CONFIG_FILE")
+NET_VIP=$(yq e '.network.vip // ""' "$CONFIG_FILE" 2>/dev/null || true)
+if [ -n "$NET_VIP" ]; then
+    echo "  VIP: $NET_VIP (gateway mode — cluster IS the gateway)"
+    echo "  LAN Subnet: $(yq e '.network.lan_subnet' "$CONFIG_FILE")"
+else
+    echo "  Network: $NET_SUBNET, Gateway: $(yq e '.network.gateway // ""' "$CONFIG_FILE")"
+fi
+DNS_UPSTREAM=$(yq e '.network.dns_upstream[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' ' ')
+if [ -n "$DNS_UPSTREAM" ]; then
+    echo "  DNS Upstream: $DNS_UPSTREAM"
+else
+    echo "  DNS: $(yq e '.network.dns_servers[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' ' ')"
 fi
 
-if [ "$(yaml_get "services.nginx_ingress.enabled")" = "true" ]; then
+if [ "$(yq e '.services.metallb.enabled // "false"' "$CONFIG_FILE")" = "true" ]; then
+    echo "  MetalLB: $(yq e '.network.loadbalancer_pool.start // ""' "$CONFIG_FILE") - $(yq e '.network.loadbalancer_pool.end // ""' "$CONFIG_FILE")"
+fi
+
+if [ "$(yq e '.services.nginx_ingress.enabled // "false"' "$CONFIG_FILE")" = "true" ]; then
     echo "  NGINX Ingress: Enabled"
+fi
+
+if [ "$(yq e '.services.openwrt.enabled // "false"' "$CONFIG_FILE")" = "true" ]; then
+    echo "  OpenWrt: $(yq e '.services.openwrt.image' "$CONFIG_FILE")"
 fi
 
 echo ""
 echo "Next steps:"
-echo "1. Prepare SD cards using: sudo ./setup-sd-card.sh /dev/sdX"
+echo "1. Prepare SD cards using: sudo ./scripts/setup-bootable-device.sh /dev/sdX"
 echo "2. Copy each .apkovl.tar.gz file to the corresponding SD card boot partition"
 echo "3. Insert SD cards and power on nodes (master first, then workers)"
 echo "4. Wait 5-10 minutes for complete cluster initialization"
 echo ""
 echo "Access your cluster:"
 
+# Helper to get node display IP (handles both flat and enriched schemas)
+_get_node_display_ip() {
+    local idx=$1
+    if yq e ".nodes[$idx].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null; then
+        yq e ".nodes[$idx].interfaces.lan.ip" "$CONFIG_FILE"
+    else
+        yq e ".nodes[$idx].ip" "$CONFIG_FILE"
+    fi
+}
+
 # Determine if this is a QEMU test config
 CONFIG_BASENAME="$(basename "$CONFIG_FILE")"
 case "$CONFIG_BASENAME" in
     qemu.yaml|qemu.yaml.example|*-test.yaml|*-qemu.yaml|*-test.yaml.example|*-qemu.yaml.example)
         # QEMU testing - show localhost:port access
-        yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
-            # Calculate SSH port from IP last octet (10.99.0.15 -> 2215)
-            port=$(echo "$NODE_IP" | cut -d. -f4)
+        for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+            NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+            NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+            NODE_IP=$(_get_node_display_ip $NODE_IDX)
+            NODE_BARE_IP=$(echo "$NODE_IP" | cut -d'/' -f1)
+            # Calculate SSH port from IP last octet
+            port=$(echo "$NODE_BARE_IP" | cut -d. -f4)
             ssh_port=$((2200 + port))
             echo "  $NODE_ROLE: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost -p $ssh_port"
         done
         ;;
     *)
         # Production - show direct IP access
-        yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
-            echo "  $NODE_ROLE: ssh root@$NODE_IP"
+        for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+            NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+            NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+            NODE_IP=$(_get_node_display_ip $NODE_IDX)
+            NODE_BARE_IP=$(echo "$NODE_IP" | cut -d'/' -f1)
+            echo "  $NODE_ROLE: ssh root@$NODE_BARE_IP"
         done
         ;;
 esac

@@ -35,20 +35,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Export config file for yaml-parser
 export CONFIG_FILE
 
-# Load YAML parser
-if [ ! -f "$LIB_DIR/yaml-parser.sh" ]; then
-    log_error "$LIB_DIR/yaml-parser.sh not found"
-    log_error "Make sure LIB_DIR environment variable is set correctly"
-    exit 1
-fi
-
-source "$LIB_DIR/yaml-parser.sh"
-
 # Get cluster information
-CLUSTER_NAME=$(get_cluster_name)
+CLUSTER_NAME=$(yq e '.cluster.name // ""' "$CONFIG_FILE")
 log_info "Cluster: $CLUSTER_NAME"
 echo ""
 
@@ -59,7 +49,7 @@ while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         FOUND_DIRS=true
         break
     fi
-done < <(yaml_get_nodes)
+done < <(yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE")
 
 if [ "$FOUND_DIRS" != "true" ]; then
     log_warn "No apkovl directories found. You may need to run:"
@@ -108,12 +98,12 @@ while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 
-done < <(yaml_get_nodes)
+done < <(yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE")
 
 # Summary
 echo ""
 log_info "=== Summary ==="
-TOTAL_NODES=$(yaml_get_nodes | wc -l)
+TOTAL_NODES=$(yq e '.nodes | length' "$CONFIG_FILE")
 
 log_info "Total nodes in config: $TOTAL_NODES"
 log_info "Archives created: $CREATED_COUNT"
@@ -122,7 +112,7 @@ log_info "Failed/skipped: $FAILED_COUNT"
 if [ "$CREATED_COUNT" -gt 0 ]; then
     echo ""
     log_info "Created apkovl archives:"
-    yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+    yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE" | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         if [ -f "${NODE_NAME}.apkovl.tar.gz" ]; then
             ARCHIVE_SIZE=$(du -h "${NODE_NAME}.apkovl.tar.gz" | cut -f1)
             echo "  • ${NODE_NAME}.apkovl.tar.gz (${ARCHIVE_SIZE}) - ${NODE_ROLE} node"
@@ -131,10 +121,10 @@ if [ "$CREATED_COUNT" -gt 0 ]; then
 
     echo ""
     log_info "Next steps:"
-    echo "1. Setup SD cards: sudo ./setup-sd-card.sh /dev/diskN $CONFIG_FILE"
+    echo "1. Setup SD cards: sudo ./scripts/setup-bootable-device.sh /dev/diskN $CONFIG_FILE"
     echo "2. Copy apkovl files to SD card boot partitions:"
 
-    yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+    yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE" | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
         if [ -f "${NODE_NAME}.apkovl.tar.gz" ]; then
             echo "   cp ${NODE_NAME}.apkovl.tar.gz /Volumes/BOOT/"
         fi

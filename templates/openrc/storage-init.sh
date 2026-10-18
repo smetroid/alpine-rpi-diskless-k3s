@@ -55,7 +55,7 @@ start() {
     einfo "Verifying data partition $DATA_PARTITION..."
     if [ ! -b "$DATA_PARTITION" ]; then
         eerror "Data partition $DATA_PARTITION not found"
-        einfo "Run setup-sd-card.sh first to create the partition layout"
+        einfo "Run scripts/setup-bootable-device.sh first to create the partition layout"
         einfo "Available partitions:"
         ls -la ${STORAGE_DEVICE}* 2>/dev/null || einfo "No partitions found"
         eend 1 "Data partition not found"
@@ -320,6 +320,20 @@ start() {
         einfo "Setting up /var/lib/rancher/k3s on persistent storage"
         mount --bind /mnt/data/var-lib-rancher-k3s /var/lib/rancher/k3s
         eend $? "/var/lib/rancher/k3s mount"
+    fi
+
+    # Set up /etc/openwrt persistence (for gateway clusters with OpenWrt DaemonSet)
+    mkdir -p /mnt/data/etc-openwrt
+    if ! mountpoint -q /etc/openwrt 2>/dev/null; then
+        einfo "Setting up /etc/openwrt on persistent storage"
+        mkdir -p /etc/openwrt
+        # Copy any overlay config to persistent storage if not there yet
+        if [ -d /etc/openwrt ] && [ "$(ls -A /etc/openwrt 2>/dev/null)" ] && [ ! -f /mnt/data/etc-openwrt/.copied-from-overlay ]; then
+            cp -a /etc/openwrt/* /mnt/data/etc-openwrt/ 2>/dev/null || true
+            touch /mnt/data/etc-openwrt/.copied-from-overlay
+        fi
+        mount --bind /mnt/data/etc-openwrt /etc/openwrt
+        eend $? "/etc/openwrt mount"
     fi
 
     # Mark storage initialization as complete

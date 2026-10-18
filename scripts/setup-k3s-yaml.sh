@@ -12,9 +12,6 @@ LIB_DIR="${LIB_DIR:-$(cd "$SCRIPT_DIR/../lib" && pwd)}"
 CONFIG_FILE="${CONFIG_FILE:-cluster-config.yaml}"
 export CONFIG_FILE
 
-# Load YAML parser
-source "$LIB_DIR/yaml-parser.sh"
-
 # Load template renderer
 _templates_root="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LIB_DIR/templates.sh"
@@ -22,12 +19,12 @@ source "$LIB_DIR/templates.sh"
 echo "Setting up K3s configuration from YAML..."
 
 # Validate configuration
-if ! validate_config; then
+if ! "$SCRIPT_DIR/validate-config.sh" "$CONFIG_FILE"; then
     exit 1
 fi
 
 # Generate or get k3s token
-K3S_TOKEN=$(yaml_get "cluster.token")
+K3S_TOKEN=$(yq e '.cluster.token // ""' "$CONFIG_FILE")
 if [ -z "$K3S_TOKEN" ]; then
     K3S_TOKEN=$(openssl rand -hex 32)
     echo "Generated K3S_TOKEN: $K3S_TOKEN"
@@ -38,25 +35,53 @@ else
 fi
 
 # Get configuration values
-CLUSTER_CIDR=$(get_k3s_cluster_cidr)
-SERVICE_CIDR=$(get_k3s_service_cidr)
-FLANNEL_BACKEND=$(yaml_get "k3s.flannel_backend")
+CLUSTER_CIDR=$(yq e '.k3s.cluster_cidr // ""' "$CONFIG_FILE")
+SERVICE_CIDR=$(yq e '.k3s.service_cidr // ""' "$CONFIG_FILE")
+FLANNEL_BACKEND=$(yq e '.k3s.flannel_backend // ""' "$CONFIG_FILE")
 DISABLE_SERVICES=()
 while IFS= read -r _line; do
     [[ -n "$_line" ]] && DISABLE_SERVICES+=("$_line")
-done < <(yaml_get_array ".k3s.disable_services[]")
+done < <(yq e '.k3s.disable_services[]' "$CONFIG_FILE" 2>/dev/null)
 
 # Get external datastore configuration (optional)
 DATASTORE_ENDPOINT=""
-if get_datastore_endpoint; then
-    DATASTORE_ENDPOINT=$(get_datastore_endpoint)
-    DATASTORE_TYPE=$(get_datastore_type)
-    echo "Using external datastore (${DATASTORE_TYPE}): $(yaml_get "k3s.datastore.host")"
+DATASTORE_TYPE=$(yq e '.k3s.datastore.type // ""' "$CONFIG_FILE")
+if [ -n "$DATASTORE_TYPE" ]; then
+    DATASTORE_HOST=$(yq e '.k3s.datastore.host // ""' "$CONFIG_FILE")
+    DATASTORE_PORT=$(yq e '.k3s.datastore.port // "5432"' "$CONFIG_FILE")
+    DATASTORE_DATABASE=$(yq e '.k3s.datastore.database // ""' "$CONFIG_FILE")
+    DATASTORE_USER=$(yq e '.k3s.datastore.user // ""' "$CONFIG_FILE")
+    DATASTORE_PASSWORD=$(yq e '.k3s.datastore.password // ""' "$CONFIG_FILE")
+    DATASTORE_SSLMODE=$(yq e '.k3s.datastore.sslmode // "disable"' "$CONFIG_FILE")
+
+    if [ "$DATASTORE_TYPE" = "postgres" ]; then
+        DATASTORE_ENDPOINT="postgres://${DATASTORE_USER}:${DATASTORE_PASSWORD}@${DATASTORE_HOST}:${DATASTORE_PORT}/${DATASTORE_DATABASE}?sslmode=${DATASTORE_SSLMODE}"
+    elif [ "$DATASTORE_TYPE" = "mysql" ]; then
+        DATASTORE_ENDPOINT="mysql://${DATASTORE_USER}:${DATASTORE_PASSWORD}@tcp(${DATASTORE_HOST}:${DATASTORE_PORT})/${DATASTORE_DATABASE}"
+    fi
+
+    echo "Using external datastore (${DATASTORE_TYPE}): ${DATASTORE_HOST}"
 fi
 
-# Process each node
-yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
+# Helper to get node LAN IP (handles both flat and enriched schemas)
+_get_node_lan_ip() {
+    local idx=$1
+    if yq e ".nodes[$idx].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null; then
+        local cidr; cidr=$(yq e ".nodes[$idx].interfaces.lan.ip" "$CONFIG_FILE")
+        echo "$cidr" | cut -d'/' -f1
+    else
+        yq e ".nodes[$idx].ip" "$CONFIG_FILE"
+    fi
+}
+
+# Process each node using indexed access
+NODE_COUNT=$(yq e '.nodes | length' "$CONFIG_FILE")
+for (( NODE_IDX=0; NODE_IDX<NODE_COUNT; NODE_IDX++ )); do
+    NODE_NAME=$(yq e ".nodes[$NODE_IDX].name" "$CONFIG_FILE")
+    NODE_ROLE=$(yq e ".nodes[$NODE_IDX].role" "$CONFIG_FILE")
+    NODE_IP=$(_get_node_lan_ip $NODE_IDX)
     echo "Setting up K3s configuration for $NODE_NAME ($NODE_ROLE)..."
+    echo "  Node IP: $NODE_IP"
 
     # Create K3s rancher directory if not exists (k3s reads from /etc/rancher/k3s/)
     mkdir -p "${NODE_NAME}-apkovl/etc/rancher/k3s"
@@ -85,15 +110,27 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
             done
         fi
 
+        # Pin flannel to LAN interface for gateway nodes
+        if yq e ".nodes[$NODE_IDX].interfaces" "$CONFIG_FILE" 2>/dev/null | grep -qv null; then
+            LAN_DEVICE=$(yq e ".nodes[$NODE_IDX].interfaces.lan.device" "$CONFIG_FILE")
+            echo "flannel-iface: $LAN_DEVICE" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
+        fi
+
         # Note: k3s init script is created by the k3s installer, not in the overlay
 
     else
         # Find master node IP for agent configuration
-        # In HA mode with external datastore, consider using a VIP or load balancer
-        MASTER_IP=$(yaml_get_nodes | grep ":master" | head -1 | cut -d':' -f2)
+        # Use the first master node's LAN IP
+        MASTER_IP=""
+        for (( m=0; m<NODE_COUNT; m++ )); do
+            if [ "$(yq e ".nodes[$m].role" "$CONFIG_FILE")" = "master" ]; then
+                MASTER_IP=$(_get_node_lan_ip $m)
+                break
+            fi
+        done
 
         # Check if a HA load balancer VIP is configured
-        LB_VIP=$(yaml_get "k3s.loadbalancer_vip" 2>/dev/null || echo "")
+        LB_VIP=$(yq e '.k3s.loadbalancer_vip // ""' "$CONFIG_FILE")
         if [ -n "$LB_VIP" ]; then
             SERVER_URL="https://$LB_VIP:6443"
             echo "# Worker using load balancer VIP: $LB_VIP"
@@ -117,7 +154,6 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
 
     # Note: k3s init script is created by the k3s installer during installation
     # The k3s service will be enabled by the k3s_bootstrap script
-    
 
 done
 

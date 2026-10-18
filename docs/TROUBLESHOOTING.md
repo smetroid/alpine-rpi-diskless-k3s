@@ -230,9 +230,9 @@ Alpine diskless runs entirely in RAM. With 512MB RAM:
 - Total needed: **2GB minimum**
 
 **Solution:**
-Increased RAM in `test/test-alpine-diskless-boot.sh`:
+Set `RAM_SIZE` when running `test/qemu-test.sh`:
 ```bash
-RAM_SIZE="2048M"  # Was 512M
+RAM_SIZE=2048M ./test/qemu-test.sh server
 ```
 
 **Memory breakdown:**
@@ -252,21 +252,25 @@ RAM_SIZE="2048M"  # Was 512M
 
 **Step 1: Create template (one-time setup):**
 ```bash
-# Run first boot to partition and format
-./test/test-alpine-diskless-boot.sh
+# Run a full boot so the disk gets partitioned and formatted
+./test/launch-qemu-cluster.sh
 
-# After boot completes, save as template
-cd test/vm-diskless
-cp data.qcow2 data-partitioned-template.qcow2
+# After boot completes, stop the cluster and save as template
+./test/qemu-test.sh stop all
+cd test/qemu-cluster
+cp qemu-test-1-data.qcow2 qemu-test-1-data-partitioned-template.qcow2
 ```
 
 **Step 2: Use template (every test):**
 ```bash
 # Clean start
-rm -f test/vm-diskless/data.qcow2
+rm -f test/qemu-cluster/qemu-test-1-data.qcow2
 
-# Run test - automatically copies template
-./test/test-alpine-diskless-boot.sh
+# Restore from template
+cp test/qemu-cluster/qemu-test-1-data-partitioned-template.qcow2 test/qemu-cluster/qemu-test-1-data.qcow2
+
+# Run test
+./test/launch-qemu-cluster.sh
 ```
 
 **Benefits:**
@@ -394,7 +398,7 @@ rm -rf builds/k3s-*-apkovl builds/*.apkovl.tar.gz
 ./build-from-yaml.sh k3s.yaml
 
 # Test changes
-./test/test-alpine-diskless-boot.sh
+./test/launch-qemu-cluster.sh
 ```
 
 ---

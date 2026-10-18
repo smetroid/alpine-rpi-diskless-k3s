@@ -27,12 +27,11 @@ alpine-rpi-diskless/
 │   ├── setup-bootable-device.sh # SD card preparation
 │   └── validate-config.sh     # Configuration validation
 ├── lib/
-│   └── yaml-parser.sh         # YAML parsing library
 ├── builds/                    # Generated output directory
 ├── test/                      # Testing and simulation scripts
 ├── docs/                      # Documentation
 ├── k3s.yaml                   # Main cluster configuration
-└── cluster-config.yaml.example # Example configuration
+└── k3s.yaml.example           # Example configuration
 ```
 
 ### Key Architecture Principles
@@ -77,14 +76,16 @@ sudo ./scripts/setup-bootable-device.sh /dev/sdX [config-file.yaml] [node-name]
 
 ### Testing and Simulation
 ```bash
-# Test Alpine diskless boot process
-./test/test-alpine-diskless-boot.sh
+# Unified QEMU testing (single or multi-node)
+./test/launch-qemu-cluster.sh          # Launch full cluster
+./test/qemu-test.sh status             # Show running VMs
+./test/qemu-test.sh stop all           # Stop all VMs
 ```
 
 ### Configuration Management
 ```bash
 # Use default configuration
-cp cluster-config.yaml.example my-cluster.yaml
+cp k3s.yaml.example my-cluster.yaml
 
 # Multiple environments
 make build CONFIG=dev-cluster.yaml
@@ -95,7 +96,7 @@ make build CONFIG=prod-cluster.yaml
 
 ### Configuration Files
 - `k3s.yaml`: Main cluster configuration (currently active)
-- `cluster-config.yaml.example`: Template configuration file
+- `k3s.yaml.example`: Template configuration file
 - Individual `*-cluster.yaml`: Environment-specific configurations
 
 ### Generated Files (in builds/)
@@ -106,7 +107,7 @@ make build CONFIG=prod-cluster.yaml
 
 ### Critical Scripts
 - `scripts/build-from-yaml.sh`: Main orchestrator that calls all other scripts
-- `lib/yaml-parser.sh`: YAML parsing functions used by all scripts
+- `yq`: Required YAML query tool (install with `brew install yq` or `apt install yq`)
 
 ## Development Guidelines
 
@@ -118,16 +119,14 @@ make build CONFIG=prod-cluster.yaml
 - Use `make build` or call `scripts/build-from-yaml.sh` directly to run builds
 
 ### YAML Configuration
-The system uses a custom YAML parser (`lib/yaml-parser.sh`) that supports:
-- Nested key access (e.g., `network.gateway`)
-- Array parsing (e.g., `nodes`, `dns_servers`)
-- Service configuration parsing
-- Node definitions with IP, role, and optional taints
+All scripts use `yq` (the lightweight YAML query tool) to read configuration values directly. Nested keys and arrays are accessed with standard yq expressions:
+- Single values: `yq e '.network.gateway // ""' "$CONFIG_FILE"`
+- Arrays: `yq e '.network.dns_servers[]' "$CONFIG_FILE" 2>/dev/null`
+- Node info: `yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE"`
 
 ### Testing Strategy
-- Use QEMU simulation for testing (`test/test-alpine-diskless-boot.sh`)
-- Supports both DHCP and bridge networking modes
-- Simulates exact Raspberry Pi boot process including device setup
+- Use QEMU simulation for testing (`test/launch-qemu-cluster.sh`)
+- Uses `qemu.yaml.example` config and socket networking between VMs
 
 ### Service Dependencies
 OpenRC services follow this dependency chain:
@@ -158,7 +157,7 @@ The system uses Alpine's LBU (Local Backup Utility) combined with SD card persis
 ### Adding New Services
 1. Add service configuration to YAML schema
 2. Update `scripts/generate-manifests-yaml.sh` for Kubernetes manifests
-3. Update `lib/yaml-parser.sh` for new parsing functions if needed
+3. Use `yq` directly in scripts for any new config reads
 
 ### Troubleshooting Build Issues
 1. Check `builds/` directory for generated files

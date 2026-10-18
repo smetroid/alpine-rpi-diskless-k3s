@@ -41,9 +41,6 @@ case "$CONFIG_BASENAME" in
         ;;
 esac
 
-# Source YAML parser
-source "$PROJECT_DIR/lib/yaml-parser.sh"
-
 # Source cache library if available
 if [ -f "$PROJECT_DIR/lib/cache.sh" ]; then
     source "$PROJECT_DIR/lib/cache.sh"
@@ -84,23 +81,25 @@ EOF
 }
 
 # Get node info from YAML config
-# yaml_get_nodes returns lines in format: name:ip:role
+# _node_query returns lines in format: name:ip:role
+_node_query() { yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE"; }
+
 get_node_ip() {
     local node_name="$1"
-    yaml_get_nodes | grep "^${node_name}:" | cut -d: -f2
+    _node_query | grep "^${node_name}:" | cut -d: -f2
 }
 
 get_node_role() {
     local node_name="$1"
-    yaml_get_nodes | grep "^${node_name}:" | cut -d: -f3
+    _node_query | grep "^${node_name}:" | cut -d: -f3
 }
 
 get_master_node() {
-    yaml_get_nodes | grep ":master$" | head -1 | cut -d: -f1
+    _node_query | grep ":master$" | head -1 | cut -d: -f1
 }
 
 get_master_ip() {
-    yaml_get_nodes | grep ":master$" | head -1 | cut -d: -f2
+    _node_query | grep ":master$" | head -1 | cut -d: -f2
 }
 
 generate_mac() {
@@ -118,21 +117,17 @@ list_worker_nodes() {
         if [ "$role" = "worker" ]; then
             echo "  $node ($ip)"
         fi
-    done < <(yaml_get_nodes)
+    done < <(_node_query)
 }
 
 # Get Alpine version from config
 get_alpine_version() {
-    local version
-    version=$(yaml_get "alpine.version")
-    echo "${version:-3.22.1}"  # Default fallback
+    yq e '.alpine.version // "3.22.1"' "$CONFIG_FILE"
 }
 
 # Get Alpine architecture from config
 get_alpine_arch() {
-    local arch
-    arch=$(yaml_get "alpine.architecture")
-    echo "${arch:-x86_64}"  # Default fallback
+    yq e '.alpine.architecture // "x86_64"' "$CONFIG_FILE"
 }
 
 # Setup VM directory and download Alpine

@@ -40,9 +40,8 @@ SD_DEVICE=$1
 CONFIG_FILE="${CONFIG_FILE:-${2:-cluster-config.yaml}}"
 NODE="${NODE:-${3}}"
 
-# Load YAML parser if config file exists
+# Export config file
 if [ -f "$CONFIG_FILE" ]; then
-    source "$LIB_DIR/yaml-parser.sh"
     export CONFIG_FILE
     log_info "Using configuration: $CONFIG_FILE"
 else
@@ -71,7 +70,7 @@ sudo umount ${SD_DEVICE}* 2>/dev/null || true
 
 # Get boot partition size from config early (before using it)
 if [ -f "$CONFIG_FILE" ]; then
-    BOOT_PARTITION_SIZE=$(yaml_get "storage.boot_partition_size" || echo "512MiB")
+    BOOT_PARTITION_SIZE=$(yq e '.storage.boot_partition_size // "512MiB"' "$CONFIG_FILE")
 else
     BOOT_PARTITION_SIZE="512MiB"
 fi
@@ -275,8 +274,8 @@ log_info "Downloading Alpine Linux..."
 
 # Get Alpine version and architecture from YAML config or use defaults
 if [ -f "$CONFIG_FILE" ]; then
-    ALPINE_VERSION=$(yaml_get "alpine.version" || echo "3.18.6")
-    ALPINE_ARCH=$(yaml_get "alpine.architecture" || echo "aarch64")
+    ALPINE_VERSION=$(yq e '.alpine.version // "3.18.6"' "$CONFIG_FILE")
+    ALPINE_ARCH=$(yq e '.alpine.architecture // "aarch64"' "$CONFIG_FILE")
     log_info "Alpine version: $ALPINE_VERSION ($ALPINE_ARCH)"
 else
     ALPINE_VERSION="3.18.6"

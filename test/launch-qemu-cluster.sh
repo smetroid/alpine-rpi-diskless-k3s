@@ -21,14 +21,11 @@ cd "$PROJECT_DIR"
 CONFIG_FILE="$PROJECT_DIR/qemu.yaml"
 export CONFIG_FILE
 
-# Source yaml parser
-source lib/yaml-parser.sh
-
 # Get nodes from config (format: name:ip:role)
 NODES=()
 while IFS=':' read -r name ip role; do
     [ -n "$name" ] && NODES+=("$name:$ip:$role")
-done < <(yaml_get_nodes | grep -v '^$')
+done < <(yq e '.nodes[] | .name + ":" + (.ip // (.interfaces.lan.ip // "" | split("/")[0])) + ":" + .role' "$CONFIG_FILE" | grep -v '^$')
 
 if [ ${#NODES[@]} -eq 0 ]; then
     echo "ERROR: No nodes found in $CONFIG_FILE"
