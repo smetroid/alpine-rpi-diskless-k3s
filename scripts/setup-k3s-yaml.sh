@@ -46,10 +46,19 @@ while IFS= read -r _line; do
     [[ -n "$_line" ]] && DISABLE_SERVICES+=("$_line")
 done < <(yaml_get_array ".k3s.disable_services[]")
 
-KUBE_APISERVER_ARGS=()
-while IFS= read -r _line; do
-    [[ -n "$_line" ]] && KUBE_APISERVER_ARGS+=("$_line")
-done < <(yaml_get_array ".k3s.kube_apiserver_arg[]")
+# Append the config list .k3s.<name> to a k3s config file as <name with dashes>:
+# e.g. kube_apiserver_arg -> kube-apiserver-arg. Writes nothing if the list is empty.
+append_k3s_args() {
+    local name="$1" file="$2" key="${1//_/-}" header_written="" _line
+    while IFS= read -r _line; do
+        [[ -z "$_line" ]] && continue
+        if [ -z "$header_written" ]; then
+            echo "${key}:" >> "$file"
+            header_written=1
+        fi
+        echo "  - \"$_line\"" >> "$file"
+    done < <(yaml_get_array ".k3s.${name}[]")
+}
 
 # Get external datastore configuration (optional)
 DATASTORE_ENDPOINT=""
@@ -90,13 +99,11 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
             done
         fi
 
-        # Add kube-apiserver args
-        if [ ${#KUBE_APISERVER_ARGS[@]} -gt 0 ]; then
-            echo "kube-apiserver-arg:" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
-            for arg in "${KUBE_APISERVER_ARGS[@]}"; do
-                echo "  - \"$arg\"" >> "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
-            done
-        fi
+        # Add extra args for the control-plane components
+        for component in kube_apiserver_arg kube_controller_manager_arg \
+                         kube_scheduler_arg kube_cloud_controller_manager_arg; do
+            append_k3s_args "$component" "${NODE_NAME}-apkovl/etc/rancher/k3s/config.yaml"
+        done
 
         # Note: k3s init script is created by the k3s installer, not in the overlay
 
