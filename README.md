@@ -85,6 +85,47 @@ alpine-rpi-diskless/
 
 5. **Boot and join**: Insert SD cards into your Raspberry Pis and power on. The nodes will automatically join the cluster.
 
+### Adding a Node to an Existing Cluster
+
+Workers join by fetching the k3s join token from a master over SSH, using a cluster-wide SSH key. A new node can only join if it is built with the **same cluster key** as the nodes already running.
+
+1. **Make sure the build uses the existing cluster key.** By default the key lives at `.cluster_ssh_keys/<cluster name>/cluster_id_rsa` next to your config file and is created on the first build. If you build from another checkout or machine, or your cluster was built before `cluster.ssh_key` existed, copy the key from any running node and point the config at it:
+   ```bash
+   (umask 077; ssh root@<master-ip> cat /root/.ssh/cluster_id_rsa > ~/.ssh/my-cluster_id_rsa)
+   ```
+   ```yaml
+   cluster:
+     ssh_key: "~/.ssh/my-cluster_id_rsa"
+   ```
+
+2. **Add the node** to the `nodes:` list in your config:
+   ```yaml
+     - name: "k3s-24"
+       ip: "192.168.1.24"
+       role: "worker"
+   ```
+
+3. **Validate and build.** Always pass `CONFIG=`, since the Makefile default is `k3s.yaml.example`:
+   ```bash
+   make validate CONFIG=my-cluster.yaml
+   make build CONFIG=my-cluster.yaml
+   ```
+   The build output must say `Using existing cluster SSH key pair: ...`. If it says `generated`, the build did not find your cluster key and the new node will not be able to join. The build also regenerates the other nodes' archives; you don't need to re-flash those.
+
+4. **Prepare the SD card** (this erases the device, so check it with `diskutil list` or `lsblk` first):
+   ```bash
+   make setup-sd DEVICE=/dev/sdX NODE=k3s-24 CONFIG=my-cluster.yaml
+   ```
+
+5. **Boot the node** while the master is running and reachable. The first boot needs internet access to install packages and can take several minutes. Then check:
+   ```bash
+   kubectl get nodes -o wide
+   ```
+
+If the node boots but never joins:
+- If its IP was used before, remove the old host key on your machine: `ssh-keygen -R <node-ip>`.
+- On the node, check the token service and the k3s log: `rc-status | grep token` and `tail /var/log/k3s.log`. Repeated `--token is required` errors mean the node could not fetch the token. That usually means its cluster key is not authorized on the master.
+
 ## Configuration
 
 The cluster is configured through YAML files. Key configuration sections include:
