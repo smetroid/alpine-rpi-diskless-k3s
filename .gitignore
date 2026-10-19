@@ -68,3 +68,6 @@ initramfs-*
 # Reference backups for template verification
 builds-reference/
 builds-qemu-reference/
+
+# Cluster SSH key (private key shared by all nodes)
+.cluster_ssh_keys/

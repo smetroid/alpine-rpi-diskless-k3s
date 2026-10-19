@@ -93,6 +93,9 @@ cluster:
   name: "cluster-name"           # Cluster identifier
   k3s_version: "latest"          # k3s version or "latest"
   token: ""                      # Leave empty to auto-generate
+  ssh_key: ""                    # Cluster SSH key path (default: .cluster_ssh_keys/<name>/cluster_id_rsa
+                                 # next to the config; generated on first build - keep it,
+                                 # nodes built later need it to join)
 ```
 
 ### Network Configuration
