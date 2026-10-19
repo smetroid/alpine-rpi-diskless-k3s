@@ -309,21 +309,38 @@ echo "Gateway: $GATEWAY"
 echo "DNS: ${DNS_SERVERS[*]}"
 echo ""
 
-# Generate cluster-wide SSH key pair for inter-node communication
-# This allows workers to SSH into masters to retrieve k3s join tokens
-echo "Generating cluster SSH key pair for inter-node communication..."
-CLUSTER_KEY_DIR=".cluster_ssh_keys"
-mkdir -p "$CLUSTER_KEY_DIR"
+# Cluster-wide SSH key pair for inter-node communication
+# This allows workers to SSH into masters to retrieve k3s join tokens.
+# The key is part of the cluster's identity: it must persist across builds so
+# nodes built later can still join masters built earlier.
+# cluster.ssh_key sets the private key path (~ and paths relative to the config
+# file are supported); default is .cluster_ssh_keys/<cluster name>/cluster_id_rsa
+# next to the config file. The key is generated there if it does not exist.
+CONFIG_DIR="$(cd "$(dirname "$CONFIG_FILE")" && pwd)"
+CLUSTER_KEY=$(yaml_get "cluster.ssh_key" 2>/dev/null || true)
+if [ -z "$CLUSTER_KEY" ]; then
+    CLUSTER_KEY="$CONFIG_DIR/.cluster_ssh_keys/$(yaml_get "cluster.name")/cluster_id_rsa"
+fi
+CLUSTER_KEY="${CLUSTER_KEY/#\~/$HOME}"
+case "$CLUSTER_KEY" in
+    /*) ;;
+    *) CLUSTER_KEY="$CONFIG_DIR/$CLUSTER_KEY" ;;
+esac
 
-if [ ! -f "$CLUSTER_KEY_DIR/cluster_id_rsa" ]; then
-    ssh-keygen -t rsa -f "$CLUSTER_KEY_DIR/cluster_id_rsa" -N "" -q
-    echo "✅ Cluster SSH key pair generated"
+if [ ! -f "$CLUSTER_KEY" ]; then
+    mkdir -p "$(dirname "$CLUSTER_KEY")"
+    ssh-keygen -t rsa -f "$CLUSTER_KEY" -N "" -q
+    echo "✅ Cluster SSH key pair generated: $CLUSTER_KEY"
+    echo "   Keep this key: nodes built later need it to join this cluster"
 else
-    echo "✅ Using existing cluster SSH key pair"
+    echo "✅ Using existing cluster SSH key pair: $CLUSTER_KEY"
+fi
+if [ ! -f "$CLUSTER_KEY.pub" ]; then
+    ssh-keygen -y -f "$CLUSTER_KEY" > "$CLUSTER_KEY.pub"
 fi
 
 # Read the public key
-CLUSTER_PUBLIC_KEY=$(cat "$CLUSTER_KEY_DIR/cluster_id_rsa.pub")
+CLUSTER_PUBLIC_KEY=$(cat "$CLUSTER_KEY.pub")
 
 # Process each node
 yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
@@ -413,8 +430,8 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     echo "$CLUSTER_PUBLIC_KEY" >> "${NODE_NAME}-apkovl/root/.ssh/authorized_keys"
 
     # Add cluster private key to each node
-    cp -a "$CLUSTER_KEY_DIR/cluster_id_rsa" "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa"
-    cp -a "$CLUSTER_KEY_DIR/cluster_id_rsa.pub" "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa.pub"
+    cp "$CLUSTER_KEY" "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa"
+    cp "$CLUSTER_KEY.pub" "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa.pub"
     chmod 600 "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa"
     chmod 644 "${NODE_NAME}-apkovl/root/.ssh/cluster_id_rsa.pub"
 
@@ -488,10 +505,6 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     ln -sf /etc/init.d/late-services "${NODE_NAME}-apkovl/etc/runlevels/default/late-services"
 
 done
-
-# Clean up temporary cluster SSH key directory
-rm -rf "$CLUSTER_KEY_DIR"
-echo "✅ Cluster SSH key pair cleaned up"
 
 echo ""
 echo "✅ Base apkovl structure created for all nodes from YAML configuration"

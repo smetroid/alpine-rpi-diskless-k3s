@@ -58,11 +58,19 @@ start() {
         fi
     fi
 
-    # Restore authorized_keys from persistent storage if available
+    # Merge authorized_keys from persistent storage if available.
+    # Keys from the boot image (configured keys and the cluster key) are always
+    # kept, so a re-flashed node picks up the keys of its new build; keys added
+    # at runtime and saved to persistent storage are appended to them.
     if [ -d "$SSH_PERSIST_DIR" ] && [ -f "$SSH_PERSIST_DIR/authorized_keys" ]; then
-        einfo "Restoring authorized_keys from persistent storage..."
+        einfo "Merging authorized_keys from persistent storage..."
         mkdir -p /root/.ssh
-        cp -a "$SSH_PERSIST_DIR/authorized_keys" /root/.ssh/authorized_keys
+        touch /root/.ssh/authorized_keys
+        while IFS= read -r key; do
+            if [ -n "$key" ] && ! grep -qxF "$key" /root/.ssh/authorized_keys; then
+                echo "$key" >> /root/.ssh/authorized_keys
+            fi
+        done < "$SSH_PERSIST_DIR/authorized_keys"
     fi
 
     # Ensure /root and .ssh have correct ownership and permissions
@@ -75,8 +83,8 @@ start() {
         chmod 600 /root/.ssh/authorized_keys
         chown -R root:root /root/.ssh
 
-        # Save to persistent storage if not already there
-        if [ -d "$SSH_PERSIST_DIR" ] && [ ! -f "$SSH_PERSIST_DIR/authorized_keys" ]; then
+        # Save the merged keys to persistent storage
+        if [ -d "$SSH_PERSIST_DIR" ]; then
             cp -a /root/.ssh/authorized_keys "$SSH_PERSIST_DIR/authorized_keys"
         fi
     fi

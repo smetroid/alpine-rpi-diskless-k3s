@@ -5,6 +5,10 @@ cluster:
   name: "alpine-k3s"
   k3s_version: "latest"
   token: "" # Leave empty to auto-generate
+  # Cluster SSH key workers use to fetch the join token from masters.
+  # Generated on first build; keep it - nodes built later need the same key.
+  # Default: .cluster_ssh_keys/<name>/cluster_id_rsa next to this file
+  #ssh_key: "~/.ssh/alpine-k3s_cluster_id_rsa"
 
 network:
   domain: "local"
