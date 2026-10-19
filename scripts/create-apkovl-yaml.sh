@@ -452,6 +452,12 @@ yaml_get_nodes | while IFS=':' read -r NODE_NAME NODE_IP NODE_ROLE; do
     chmod +x "${NODE_NAME}-apkovl/etc/init.d/k3s"
     ln -sf /etc/init.d/k3s "${NODE_NAME}-apkovl/etc/runlevels/default/k3s"
 
+    # Rotate /var/log/k3s.log hourly; /var/log is tmpfs, so it otherwise grows in RAM
+    mkdir -p "${NODE_NAME}-apkovl/etc/periodic/hourly"
+    render_template "scripts/k3s-log-rotate.sh" "${NODE_NAME}-apkovl/etc/periodic/hourly/k3s-log-rotate"
+    chmod +x "${NODE_NAME}-apkovl/etc/periodic/hourly/k3s-log-rotate"
+    ln -sf /etc/init.d/crond "${NODE_NAME}-apkovl/etc/runlevels/default/crond"
+
     # Create minimal fstab — storage-init handles actual data partition mounting
     render_template "config/fstab.sh" "${NODE_NAME}-apkovl/etc/fstab"
     
