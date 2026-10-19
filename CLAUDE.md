@@ -145,10 +145,12 @@ The system uses Alpine's LBU (Local Backup Utility) combined with SD card persis
 ## Common Development Tasks
 
 ### Adding New Node Configuration
-1. Edit the YAML configuration file to add new nodes
-2. Run `make validate CONFIG=my-cluster.yaml` to check configuration
-3. Run `make build CONFIG=my-cluster.yaml` to generate new overlays
-4. Deploy to SD cards using `make setup-sd DEVICE=/dev/sdX NODE=k3s-21`
+See "Adding a Node to an Existing Cluster" in README.md. In short:
+1. Ensure `cluster.ssh_key` points at the cluster's existing key (workers use it to fetch the join token from a master)
+2. Edit the YAML configuration file to add new nodes
+3. Run `make validate CONFIG=my-cluster.yaml` to check configuration
+4. Run `make build CONFIG=my-cluster.yaml` to generate new overlays (output must say "Using existing cluster SSH key pair")
+5. Deploy to SD cards using `make setup-sd DEVICE=/dev/sdX NODE=k3s-24 CONFIG=my-cluster.yaml`
 
 ### Modifying k3s Configuration
 1. Edit YAML configuration (k3s section)
