@@ -40,6 +40,27 @@ k3s:
     - "servicelb"
     #- "traefik"
 
+  # Extra arguments passed directly to the kube-apiserver
+  # Recommended for resource-constrained nodes to reduce etcd event churn
+  # kube_apiserver_arg:
+  #   - "event-ttl=30m"
+
+  # Extra arguments for the other control-plane components. With embedded etcd
+  # on slow storage (USB flash), longer leader-election timeouts stop the
+  # controllers from restarting when etcd stalls.
+  # kube_controller_manager_arg:
+  #   - "leader-elect-lease-duration=60s"
+  #   - "leader-elect-renew-deadline=40s"
+  #   - "leader-elect-retry-period=5s"
+  # kube_scheduler_arg:
+  #   - "leader-elect-lease-duration=60s"
+  #   - "leader-elect-renew-deadline=40s"
+  #   - "leader-elect-retry-period=5s"
+  # kube_cloud_controller_manager_arg:
+  #   - "leader-elect-lease-duration=60s"
+  #   - "leader-elect-renew-deadline=40s"
+  #   - "leader-elect-retry-period=5s"
+
   # External datastore for high availability (optional)
   # When enabled, all masters share the same backend database
   #datastore:

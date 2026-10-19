@@ -714,7 +714,7 @@ ssh root@your-master-ip
 # Check k3s status
 rc-service k3s status
 
-# View k3s logs
+# View k3s logs (rotated hourly past 10MB; the previous copy is k3s.log.1)
 tail -f /var/log/k3s.log
 
 # Check cluster formation

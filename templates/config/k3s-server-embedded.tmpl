@@ -6,3 +6,7 @@ node-ip: {{ .Env.NODE_IP }}
 cluster-cidr: "{{ .Env.CLUSTER_CIDR }}"
 service-cidr: "{{ .Env.SERVICE_CIDR }}"
 flannel-backend: "{{ .Env.FLANNEL_BACKEND }}"
+# Steer workloads to the agents: this node runs the control plane and, with
+# embedded etcd, its datastore. Soft, so it still schedules if the agents are full.
+node-taint:
+  - "node-role.kubernetes.io/control-plane:PreferNoSchedule"
