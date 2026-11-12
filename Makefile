@@ -36,7 +36,7 @@ TEMPLATES_DIR    := $(CURDIR)/templates
 export GOMPLATE_BIN
 export TEMPLATES_DIR
 
-.PHONY: help build validate clean clean-cache clean-test clean-all setup-sd test test-prod \
+.PHONY: help build validate clean clean-cache clean-test clean-all setup-sd wipe-containerd test test-prod \
         test-server test-worker test-cluster-status test-cluster-stop \
         qemu-cluster test-qemu \
         build-test template list-apkovl list-apkovl-prod list-apkovl-test show-config cache-stats \
@@ -63,6 +63,7 @@ help:
 	@echo ""
 	@echo "Disk Targets:"
 	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
+	@echo "  make wipe-containerd NODE=k3s-24   - Wipe a worker's containerd image cache (see docs/TROUBLESHOOTING.md)"
 	@echo "                          Setup SD card for a specific node"
 	@echo ""
 	@echo "Test Targets (QEMU Testing):"
@@ -147,6 +148,9 @@ endif
 	@echo "Setting up SD card on $(DEVICE) for node $(NODE)..."
 	@echo "WARNING: This will FORMAT $(DEVICE)!"
 	sudo ./$(SCRIPTS_DIR)/setup-bootable-device.sh $(DEVICE) $(CONFIG) $(NODE)
+
+wipe-containerd:
+	./$(SCRIPTS_DIR)/wipe-containerd-cache.sh $(NODE) $(CONFIG)
 
 # =============================================================================
 # Test Targets
