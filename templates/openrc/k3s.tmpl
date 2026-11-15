@@ -20,6 +20,39 @@ depend() {
 
 start_pre() {
     rm -f /tmp/k3s.*
+    wait_for_clock
+}
+
+# k3s exits with "server time isn't set properly" while the clock is unset, and
+# supervise-daemon only respawns the process, so a node whose chronyd never
+# started crash-loops forever. Diskless nodes boot at 1970 until NTP runs, so
+# make sure the clock is sane before k3s starts. Never blocks longer than 120s.
+wait_for_clock() {
+    local floor=1735689600 # 2025-01-01 UTC
+    local waited=0
+
+    [ "$(date +%s)" -ge "$floor" ] && return 0
+    einfo "System clock not set ($(date -u)), waiting for time sync"
+
+    while [ "$(date +%s)" -lt "$floor" ] && [ "$waited" -lt 120 ]; do
+        # chronyd normally does this; busybox ntpd needs no packages, so it
+        # still works when the chrony install failed at boot.
+        if rc-service chronyd status >/dev/null 2>&1; then
+            chronyc -a makestep >/dev/null 2>&1
+        fi
+        [ "$(date +%s)" -ge "$floor" ] && break
+        ntpd -q -n -p 2.pool.ntp.org >/dev/null 2>&1
+        [ "$(date +%s)" -ge "$floor" ] && break
+        sleep 5
+        waited=$((waited + 5))
+    done
+
+    if [ "$(date +%s)" -ge "$floor" ]; then
+        einfo "System clock set: $(date -u)"
+    else
+        ewarn "System clock still unset after ${waited}s, k3s will retry until time syncs"
+    fi
+    return 0
 }
 
 set -o allexport
