@@ -154,7 +154,7 @@ make build-test
 ### 3. **Physical Deployment**
 ```bash
 # Deploy to actual hardware
-make setup-sd DEVICE=/dev/sdX NODE=k3s-21
+make setup-sd DEVICE=/dev/sdX NODE=k3s-master
 # Boot physical Raspberry Pi nodes
 ```
 

@@ -33,7 +33,7 @@ k3s.yaml (production)          qemu.yaml (testing)
 ├── arch: aarch64              ├── arch: x86_64
 ├── network: 192.168.1.x       ├── network: 10.0.2.x
 ├── storage: /dev/sda          ├── storage: /dev/sda
-├── nodes: k3s-21/22/23        ├── nodes: qemu-test-1/2
+├── nodes: k3s-master/worker-1/2       ├── nodes: qemu-test-1/2
 └── overlay_packages           └── overlay_packages
     └── openssh, e2fsprogs         └── openssh, e2fsprogs
 ```
@@ -45,7 +45,7 @@ alpine-rpi-diskless/
 ├── k3s.yaml                 # Production: RPi/aarch64
 ├── qemu.yaml                # Testing: QEMU/x86_64
 ├── builds/                  # Production builds (aarch64)
-│   ├── k3s-21.apkovl.tar.gz
+│   ├── k3s-master.apkovl.tar.gz
 │   └── ...
 ├── builds-qemu/             # Test builds (x86_64)
 │   ├── qemu-test-1.apkovl.tar.gz
@@ -373,13 +373,13 @@ overlay_packages:
 ```bash
 # Verify architecture-specific binaries
 make build CONFIG=k3s.yaml
-tar -tzf builds/k3s-21.apkovl.tar.gz | grep "usr/sbin/sshd"
+tar -tzf builds/k3s-master.apkovl.tar.gz | grep "usr/sbin/sshd"
 
 make build CONFIG=qemu.yaml
 tar -tzf builds-qemu/qemu-test-1.apkovl.tar.gz | grep "usr/sbin/sshd"
 
 # Verify overlay packages included
-tar -tzf builds/k3s-21.apkovl.tar.gz | grep -E "ssh|e2fsprogs"
+tar -tzf builds/k3s-master.apkovl.tar.gz | grep -E "ssh|e2fsprogs"
 tar -tzf builds-qemu/qemu-test-1.apkovl.tar.gz | grep -E "ssh|e2fsprogs"
 ```
 
