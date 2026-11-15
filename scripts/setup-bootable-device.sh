@@ -28,10 +28,10 @@ if [ $# -lt 1 ] || [ $# -gt 3 ]; then
     echo "Usage: $0 <sd_card_device> [config_file] [node_name]"
     echo "Example: $0 /dev/sdb"
     echo "Example: $0 /dev/sdb my-cluster.yaml"
-    echo "Example: $0 /dev/sdb my-cluster.yaml k3s-21"
+    echo "Example: $0 /dev/sdb my-cluster.yaml k3s-master"
     echo ""
     echo "Alternatively, set NODE environment variable:"
-    echo "  NODE=k3s-21 $0 /dev/sdb my-cluster.yaml"
+    echo "  NODE=k3s-master $0 /dev/sdb my-cluster.yaml"
     log_warn "This will FORMAT the entire SD card!"
     exit 1
 fi

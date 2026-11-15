@@ -77,10 +77,10 @@ alpine-rpi-diskless/
 4. **Prepare SD cards**:
    ```bash
    # Using make (recommended)
-   make setup-sd DEVICE=/dev/sdX NODE=k3s-21
+   make setup-sd DEVICE=/dev/sdX NODE=k3s-master
 
    # Or directly
-   sudo ./scripts/setup-bootable-device.sh /dev/sdX my-cluster.yaml k3s-21
+   sudo ./scripts/setup-bootable-device.sh /dev/sdX my-cluster.yaml k3s-master
    ```
 
 5. **Boot and join**: Insert SD cards into your Raspberry Pis and power on. The nodes will automatically join the cluster.
@@ -100,7 +100,7 @@ Workers join by fetching the k3s join token from a master over SSH, using a clus
 
 2. **Add the node** to the `nodes:` list in your config:
    ```yaml
-     - name: "k3s-24"
+     - name: "k3s-worker-3"
        ip: "192.168.1.24"
        role: "worker"
    ```
@@ -114,7 +114,7 @@ Workers join by fetching the k3s join token from a master over SSH, using a clus
 
 4. **Prepare the SD card** (this erases the device, so check it with `diskutil list` or `lsblk` first):
    ```bash
-   make setup-sd DEVICE=/dev/sdX NODE=k3s-24 CONFIG=my-cluster.yaml
+   make setup-sd DEVICE=/dev/sdX NODE=k3s-worker-3 CONFIG=my-cluster.yaml
    ```
 
 5. **Boot the node** while the master is running and reachable. The first boot needs internet access to install packages and can take several minutes. Then check:

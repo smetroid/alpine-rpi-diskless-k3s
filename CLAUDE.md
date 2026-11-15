@@ -69,7 +69,7 @@ make validate CONFIG=my-cluster.yaml
 ### SD Card Preparation
 ```bash
 # Using make (recommended)
-make setup-sd DEVICE=/dev/sdX NODE=k3s-21
+make setup-sd DEVICE=/dev/sdX NODE=k3s-master
 
 # Or directly
 sudo ./scripts/setup-bootable-device.sh /dev/sdX [config-file.yaml] [node-name]
@@ -150,7 +150,7 @@ See "Adding a Node to an Existing Cluster" in README.md. In short:
 2. Edit the YAML configuration file to add new nodes
 3. Run `make validate CONFIG=my-cluster.yaml` to check configuration
 4. Run `make build CONFIG=my-cluster.yaml` to generate new overlays (output must say "Using existing cluster SSH key pair")
-5. Deploy to SD cards using `make setup-sd DEVICE=/dev/sdX NODE=k3s-24 CONFIG=my-cluster.yaml`
+5. Deploy to SD cards using `make setup-sd DEVICE=/dev/sdX NODE=k3s-worker-3 CONFIG=my-cluster.yaml`
 
 ### Modifying k3s Configuration
 1. Edit YAML configuration (k3s section)

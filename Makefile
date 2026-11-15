@@ -3,7 +3,7 @@
 # Usage:
 #   make build                  - Build apkovl archives from YAML config
 #   make test                   - Run diskless boot simulation
-#   make setup-sd DEVICE=/dev/sdX NODE=k3s-21  - Setup SD card
+#   make setup-sd DEVICE=/dev/sdX NODE=k3s-master  - Setup SD card
 #   make clean                  - Remove build artifacts
 
 # Ensure Homebrew bin is in PATH (macOS)
@@ -21,7 +21,7 @@ TEST_DIR := test
 export CONFIG_FILE := $(CONFIG)
 
 # Default node (first node in config)
-NODE ?= k3s-21
+NODE ?= k3s-master
 
 # Detect OS for platform-specific commands
 UNAME := $(shell uname)
@@ -62,8 +62,8 @@ help:
 	@echo "  make list-apkovl-test   List test apkovl archives"
 	@echo ""
 	@echo "Disk Targets:"
-	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-21"
-	@echo "  make wipe-containerd NODE=k3s-24   - Wipe a worker's containerd image cache (see docs/TROUBLESHOOTING.md)"
+	@echo "  make setup-sd DEVICE=/dev/sdX NODE=k3s-master"
+	@echo "  make wipe-containerd NODE=k3s-worker-1   - Wipe a worker's containerd image cache (see docs/TROUBLESHOOTING.md)"
 	@echo "                          Setup SD card for a specific node"
 	@echo ""
 	@echo "Test Targets (QEMU Testing):"
@@ -78,14 +78,14 @@ help:
 	@echo ""
 	@echo "Configuration:"
 	@echo "  CONFIG=<file>           YAML config file (default: k3s.yaml.example)"
-	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-21)"
+	@echo "  NODE=<name>             Node name for SD card operations (default: k3s-master)"
 	@echo "  DEVICE=<path>           Block device for SD card setup"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build CONFIG=my-cluster.yaml"
 	@echo "  make build-test          # Build QEMU test config (qemu.yaml.example)"
 	@echo "  make test-qemu           # Full QEMU test workflow"
-	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-21"
+	@echo "  make setup-sd DEVICE=/dev/disk4 NODE=k3s-master"
 	@echo ""
 	@echo "Lint Targets:"
 	@echo "  make lint                Run shellcheck and check formatting"
@@ -143,7 +143,7 @@ template:
 # Setup SD card - requires DEVICE variable
 setup-sd:
 ifndef DEVICE
-	$(error DEVICE is required. Usage: make setup-sd DEVICE=/dev/sdX NODE=k3s-21)
+	$(error DEVICE is required. Usage: make setup-sd DEVICE=/dev/sdX NODE=k3s-master)
 endif
 	@echo "Setting up SD card on $(DEVICE) for node $(NODE)..."
 	@echo "WARNING: This will FORMAT $(DEVICE)!"

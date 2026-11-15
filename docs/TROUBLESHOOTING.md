@@ -304,7 +304,7 @@ Full system snapshot now captures:
 - `/var/lib` - Runtime state (selective)
 
 **How it works:**
-1. **First boot:** `system-bootstrap` creates `runtime-k3s-21-test.apkovl.tar.gz`
+1. **First boot:** `system-bootstrap` creates `runtime-k3s-master-test.apkovl.tar.gz`
 2. **Shutdown:** `lbu-persist` updates the runtime apkovl
 3. **Next boot:** Alpine's init automatically loads runtime apkovl
 4. **All changes preserved!**
@@ -320,7 +320,7 @@ Alpine's init automatically finds and loads any `.apkovl.tar.gz` files on mounte
 ```
 Alpine init (before OpenRC):
   └─ Scans /media/sda2/
-  └─ Finds runtime-k3s-21-test.apkovl.tar.gz
+  └─ Finds runtime-k3s-master-test.apkovl.tar.gz
   └─ Extracts to / automatically ✅
 
 OpenRC starts:
@@ -385,8 +385,8 @@ Compare the binary's size with the same file on a healthy node. Avoid
 
 **Fix** (workers only): wipe the node's containerd cache and let images re-pull.
 ```bash
-make wipe-containerd NODE=k3s-24 CONFIG=k3s.yaml
-# or: ./scripts/wipe-containerd-cache.sh k3s-24 k3s.yaml [--yes]
+make wipe-containerd NODE=k3s-worker-1 CONFIG=k3s.yaml
+# or: ./scripts/wipe-containerd-cache.sh k3s-worker-1 k3s.yaml [--yes]
 ```
 This stops k3s, kills container processes, deletes only
 `/var/lib/rancher/k3s/agent/containerd`, and restarts k3s. Node identity, PVC
@@ -469,8 +469,8 @@ watch -n 1 dmesg | tail -20
 ### Verify apkovl Contents
 ```bash
 # List files in apkovl
-tar -tzf /media/sda2/runtime-k3s-21-test.apkovl.tar.gz
+tar -tzf /media/sda2/runtime-k3s-master-test.apkovl.tar.gz
 
 # Check for specific files
-tar -tzf /media/sda2/runtime-k3s-21-test.apkovl.tar.gz | grep k3s_bootstrap
+tar -tzf /media/sda2/runtime-k3s-master-test.apkovl.tar.gz | grep k3s_bootstrap
 ```

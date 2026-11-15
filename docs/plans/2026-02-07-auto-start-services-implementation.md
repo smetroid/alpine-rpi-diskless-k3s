@@ -252,20 +252,20 @@ Expected: Build completes with "Generating auto-start services configuration..."
 
 **Step 3: Verify service was created**
 
-Run: `ls -la builds/k3s-21-apkovl/etc/init.d/auto-start-services`
+Run: `ls -la builds/k3s-master-apkovl/etc/init.d/auto-start-services`
 Expected: File exists and is executable
 
-Run: `ls -la builds/k3s-21-apkovl/etc/runlevels/default/auto-start-services`
+Run: `ls -la builds/k3s-master-apkovl/etc/runlevels/default/auto-start-services`
 Expected: Symlink exists
 
 **Step 4: Verify PACKAGES list in service**
 
-Run: `grep "PACKAGES=" builds/k3s-21-apkovl/etc/init.d/auto-start-services`
+Run: `grep "PACKAGES=" builds/k3s-master-apkovl/etc/init.d/auto-start-services`
 Expected: `PACKAGES="nfs-utils chrony"` (or similar based on config)
 
 **Step 5: Verify service script syntax**
 
-Run: `sh -n builds/k3s-21-apkovl/etc/init.d/auto-start-services`
+Run: `sh -n builds/k3s-master-apkovl/etc/init.d/auto-start-services`
 Expected: No syntax errors
 
 **Step 6: No commit yet** (testing in progress)

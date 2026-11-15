@@ -15,8 +15,8 @@ test/
 │   ├── alpine-virt-3.22.1-x86_64.iso  # Alpine Linux ISO (downloaded)
 │   ├── data.qcow2                   # Virtual data disk (4GB)
 │   └── overlaydir/                  # Overlay files for testing
-├── k3s-21.apkovl.tar.gz            # Test overlay archive
-├── k3s-21.apkovl/                   # Extracted test overlay
+├── k3s-master.apkovl.tar.gz            # Test overlay archive
+├── k3s-master.apkovl/                   # Extracted test overlay
 └── setup.log                       # Test execution logs
 ```
 
@@ -39,8 +39,8 @@ test/
 - **Persistent Storage**: Virtual data disk for testing persistence
 
 ### 2. Test Overlay Files
-- **`k3s-21.apkovl.tar.gz`**: Test overlay archive containing k3s configuration
-- **`k3s-21.apkovl/`**: Extracted overlay with full directory structure
+- **`k3s-master.apkovl.tar.gz`**: Test overlay archive containing k3s configuration
+- **`k3s-master.apkovl/`**: Extracted overlay with full directory structure
 - **`overlaydir/`**: Working directory for overlay files during testing
 
 ## Required Tools and Utilities
@@ -156,8 +156,8 @@ diskutil list  # Should work without errors
 ./build-from-yaml.sh cluster-config.yaml.example
 
 # This creates the overlay files needed for testing:
-# - builds/k3s-21-apkovl/ (directory structure)
-# - builds/k3s-21.apkovl.tar.gz (compressed archive)
+# - builds/k3s-master-apkovl/ (directory structure)
+# - builds/k3s-master.apkovl.tar.gz (compressed archive)
 ```
 
 ### 3. Run Test Simulation
@@ -252,7 +252,7 @@ ssh -p 2222 root@localhost "cat /mnt/data/test.txt"
 ### 4. Overlay Test
 ```bash
 # Test different overlay configurations
-cp builds/k3s-22.apkovl.tar.gz test/overlaydir/
+cp builds/k3s-worker-1.apkovl.tar.gz test/overlaydir/
 ./test-alpine-diskless-boot.sh
 ```
 
@@ -333,7 +333,7 @@ tar -tzf test/overlaydir/*.apkovl.tar.gz | head -10
 # To: -nographic -serial mon:stdio
 
 # Check overlay structure
-tar -tzf builds/k3s-21.apkovl.tar.gz | grep -E "(k3s|local\.d)"
+tar -tzf builds/k3s-master.apkovl.tar.gz | grep -E "(k3s|local\.d)"
 ```
 
 ## Advanced Testing
@@ -341,11 +341,11 @@ tar -tzf builds/k3s-21.apkovl.tar.gz | grep -E "(k3s|local\.d)"
 ### Custom Overlay Testing
 ```bash
 # Test different overlay configurations
-cp builds/k3s-22.apkovl.tar.gz test/overlaydir/
+cp builds/k3s-worker-1.apkovl.tar.gz test/overlaydir/
 ./test-alpine-diskless-boot.sh
 
 # Test minimal overlay
-cp builds/k3s-23.apkovl.tar.gz test/overlaydir/
+cp builds/k3s-worker-2.apkovl.tar.gz test/overlaydir/
 ./test-alpine-diskless-boot.sh
 ```
 
