@@ -8,6 +8,7 @@ This guide covers common issues encountered when setting up and running Alpine L
 - [Service Dependencies](#service-dependencies)
 - [QEMU Testing](#qemu-testing)
 - [Network Issues](#network-issues)
+- [Container Images](#container-images)
 
 ---
 
@@ -351,6 +352,49 @@ for dev in /sys/class/net/*; do
     esac
 done
 ```
+
+---
+
+## Container Images
+
+### Pod Crash-Loops with "exec format error" (Corrupted Image Layer)
+
+**Symptom**: A pod on one node crash-loops with `exec /<binary>: exec format error`
+while the same image runs fine on other nodes. Deleting the image and letting it
+re-pull does not help.
+
+**Cause**: Not always a wrong-architecture image. containerd keeps *unpacked*
+layer snapshots separately from the downloaded blobs and, on re-pull, reuses an
+existing snapshot with the same chain ID. If an unpacked layer is damaged (for
+example an empty `/speaker` binary), every re-pull reuses the damaged copy.
+The failing container also pins the layer, and kubelet recreates containers
+within seconds of removal, so removing a single layer by hand is a race.
+
+**Diagnose** (on the node, read-only):
+```bash
+# Empty executables in unpacked layers (empty __init__.py, resolv.conf and
+# .containerenv are normal; an empty application binary is not)
+find /var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots \
+  -type f -size 0 -perm -u+x
+
+# Rule out architecture: ELF machine bytes b7 00 = aarch64
+od -An -tx1 -j18 -N2 <path-to-binary>
+```
+Compare the binary's size with the same file on a healthy node. Avoid
+`ctr images mount`: it leaves leases that keep the layer pinned.
+
+**Fix** (workers only): wipe the node's containerd cache and let images re-pull.
+```bash
+make wipe-containerd NODE=k3s-24 CONFIG=k3s.yaml
+# or: ./scripts/wipe-containerd-cache.sh k3s-24 k3s.yaml [--yes]
+```
+This stops k3s, kills container processes, deletes only
+`/var/lib/rancher/k3s/agent/containerd`, and restarts k3s. Node identity, PVC
+data and config are untouched, but **every pod on that node restarts in place**
+(a few minutes; includes Traefik if it runs there), so schedule it. A burst of
+`pull QPS exceeded` errors while many images re-pull is normal.
+
+Masters are refused: stopping k3s there takes the API down.
 
 ---
 
