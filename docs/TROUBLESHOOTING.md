@@ -9,6 +9,7 @@ This guide covers common issues encountered when setting up and running Alpine L
 - [QEMU Testing](#qemu-testing)
 - [Network Issues](#network-issues)
 - [Container Images](#container-images)
+- [Cluster Membership](#cluster-membership)
 
 ---
 
@@ -395,6 +396,57 @@ data and config are untouched, but **every pod on that node restarts in place**
 `pull QPS exceeded` errors while many images re-pull is normal.
 
 Masters are refused: stopping k3s there takes the API down.
+
+---
+
+## Cluster Membership
+
+### Rebuilt Node Stays NotReady: "Node password rejected"
+
+**Symptom**: A worker you rebuilt or reflashed (same name, same IP) boots and
+answers on the network, but `kubectl get nodes` shows it `NotReady` with
+`Kubelet stopped posting node status`. `/var/log/k3s.log` on the node repeats:
+
+```
+Waiting to retrieve agent configuration; server is not ready: ...
+Node password rejected, duplicate hostname or contents of
+'/etc/rancher/node/password' may not match server node-passwd entry
+```
+
+The clock, network and disk are fine. The kubelet never starts, so there is no
+other error to find.
+
+**Cause**: When an agent first joins, k3s stores a password for that node name in
+the server as the secret `kube-system/<node>.node-password.k3s`. The agent keeps
+its half in `/etc/rancher/node/password` (on the data partition, so it survives
+reboots). Reflashing or reformatting the SD card creates a new password, which no
+longer matches the secret the server kept, so the server rejects the node. The
+old Node object is also still registered under that name.
+
+**Diagnose** (read-only):
+```bash
+# Server: the secret is older than the node's current password
+kubectl -n kube-system get secret | grep node-password
+
+# Node: the password file was created at the latest boot or flash time
+ls -la /etc/rancher/node/password
+tail -3 /var/log/k3s.log
+```
+
+**Fix**: remove the server's record of the old node, then let the agent
+re-register. It needs no change on the node and picks up again within seconds.
+```bash
+kubectl -n kube-system delete secret <node>.node-password.k3s
+kubectl delete node <node>
+kubectl get node <node> -w     # NotReady -> Ready
+```
+Pods that belong to the old Node object (DaemonSet pods on it) are recreated on
+the fresh registration.
+
+**Prevent**: do this *before* bringing up a rebuilt node under an existing name.
+It is not needed for a plain reboot, which keeps the password on the data
+partition. If the node's SSH host key changed too, clear the stale entry with
+`ssh-keygen -R <ip>`.
 
 ---
 
